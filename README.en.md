@@ -9,7 +9,21 @@ inside a scope (A/AAAA/CNAME/PTR/TXT/SRV), client subnets, and Query Resolution 
 It works through the built-in `DnsServer` PowerShell module — the app must run **on the DNS
 server itself**, as administrator.
 
-Author: Kuzanov.e, 2026.
+Author: Kuzanov.E (foosber@gmail.com), 2026.
+
+## Requirements
+
+- **.NET Framework 4.8** (the project's target framework is `net48`, see
+  `DnsToolWinForms.csproj`). It's already installed out of the box on most Windows Server
+  versions (2016+); if not, it can be added via
+  `Programs and Features → Turn Windows features on or off`, or downloaded separately from
+  Microsoft's site.
+- **Windows Server with the DNS Server role** — the app works through the built-in
+  `DnsServer` PowerShell module, which is only present where that role is installed
+  (or via RSAT: DNS Server Tools on a client machine, for remote management).
+- **Local administrator rights** to run the app (mandatory — see `app.manifest`).
+- **Visual Studio 2019/2022** — only needed to build from source (not required if you're
+  just using a pre-built `.exe` from Releases).
 
 ## Editing, checking and deleting a record
 
