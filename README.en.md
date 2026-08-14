@@ -339,7 +339,7 @@ before using it in production.
 
 ## Support the author
 
-If this tool was useful, you're welcome to send a bit of crypto:
+If this tool was useful, you're welcome to send a bit of crypto for the author support:
 
 - **USDT (TRC20 / TRON network):**
   `TQp9az9Nbnojg65qwvRjhwRkEnwEfFHK77`
