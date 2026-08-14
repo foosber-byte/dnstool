@@ -24,7 +24,7 @@
     <Copyright>© Kuzanov.e, 2026</Copyright>
     <!-- Версия-счётчик: увеличивается на 1 после каждой правки (v1.9.<N>) - так по exe/окну
          сразу видно, какая сборка сейчас развёрнута, без сверки с датой файла. -->
-    <AssemblyTitle>DNS Server Tool v1.9.2</AssemblyTitle>
+    <AssemblyTitle>DNS Server Tool v1.9.8</AssemblyTitle>
     <Description>Инструмент управления DNS-сервером Windows: зоны, Zone Scopes, записи, подсети, политики.</Description>
 
     <!-- Иконка exe (проводник, панель задач, свойства файла). Обязательно положи файл icon.ico
