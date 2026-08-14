@@ -328,8 +328,10 @@ MIT — используй, форкай, меняй как угодно, в т�
 
 - **USDT (сеть TRC20 / TRON):**
   `TQp9az9Nbnojg65qwvRjhwRkEnwEfFHK77`
+  
 - **ETH (сеть Ethereum, ERC20):**
   `0x40d1775df43a9ff67aabe21ccb000421c0d6f092`
+  
 - **BTC:**
   `1K59KysN6svvzGmaRDsvcY8eD2vrLyYUuv`
 
