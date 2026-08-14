@@ -321,15 +321,6 @@ program (usually Notepad).
   **all real properties** of the object into the log, so you can see the exact property
   names instead of guessing (see the `Criteria`/`Content` story above).
 
-## Things you could add yourself
-
-- Viewing/deleting records outside a scope (directly in the zone itself, with no scope
-  binding) — can be added by following the pattern already in place for scope records.
-- Support for other record types (NS, MX, etc.) — the pattern already exists in
-  `AddRecordToScopeAsync`; just add another `case` with the right cmdlet/parameter.
-- Input validation (IP addresses, CIDR) is minimal — format errors get passed straight into
-  the output panel from PowerShell/the DNS server as-is.
-
 ## License
 
 MIT — use it, fork it, change it however you like, including commercially. The only
