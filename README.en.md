@@ -347,6 +347,9 @@ If this tool was useful, you're welcome to send a bit of crypto:
 - **ETH (Ethereum network, ERC20):**
   `0x40d1775df43a9ff67aabe21ccb000421c0d6f092`
 
+- **BTC:**
+  `1K59KysN6svvzGmaRDsvcY8eD2vrLyYUuv`
+
 ⚠️ Double-check the network before sending — a transfer on the wrong network may not arrive.
 
 Totally optional — this tool is free and open regardless of whether you donate or not ^_^
