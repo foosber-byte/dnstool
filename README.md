@@ -1,6 +1,6 @@
 [English version](README.en.md)
 
-# DNS_ServerTool for Windows-base DNS Servers
+# DNS Server Tool for Windows-base DNS Servers
 
 Простое WinForms-приложение для работы с DNS-сервером Windows (то, чего нет в оснастке `dnsmgmt.msc`):
 зоны (AD-интегрированные и файловые), Zone Scopes, записи внутри scope (A/AAAA/CNAME/PTR/TXT/SRV),
