@@ -337,7 +337,7 @@ program (usually Notepad).
 
 ## License
 
-MIT — use it, fork it, change it however you like. The only
+MIT — use it, change it however you like. The only
 condition is keeping the attribution notice (the `LICENSE` file). No warranties: this tool
 writes directly to your DNS server's configuration — test it on a non-critical environment
 before using it in production.
