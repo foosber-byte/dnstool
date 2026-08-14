@@ -1,6 +1,6 @@
 [Русская версия](README.md)
 
-# DnsToolWinForms
+# DNS Server Tool for Windows-base DNS Servers
 
 A simple WinForms app for managing a Windows DNS Server — covering what the built-in
 `dnsmgmt.msc` snap-in doesn't: zones (AD-integrated and file-based), Zone Scopes, records
