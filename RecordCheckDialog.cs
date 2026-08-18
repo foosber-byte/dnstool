@@ -49,7 +49,7 @@ namespace DnsToolWinForms
                     : $"для nslookup: пусто = текущий целевой сервер ({appTargetServer})",
                 ForeColor = Color.DimGray,
                 Font = new Font("Segoe UI", 8.5F, FontStyle.Italic),
-                Location = new Point(418, 52),
+                Location = new Point(90, 70),
                 AutoSize = true
             };
             var lblServerHint2 = new Label
@@ -57,27 +57,27 @@ namespace DnsToolWinForms
                 Text = "для Ping: адрес источника (-S), если на этой машине несколько IP",
                 ForeColor = Color.DimGray,
                 Font = new Font("Segoe UI", 8.5F, FontStyle.Italic),
-                Location = new Point(90, 70),
+                Location = new Point(90, 86),
                 AutoSize = true
             };
 
-            var btnCheck = new Button { Text = "Проверить (nslookup)", Location = new Point(16, 98), Size = new Size(150, 30) };
-            var btnPing = new Button { Text = "Ping", Location = new Point(174, 98), Size = new Size(70, 30) };
-            var chkPingT = new CheckBox { Text = "-t (непрерывно)", Location = new Point(250, 103), AutoSize = true };
-            var btnPingStop = new Button { Text = "Стоп", Location = new Point(400, 98), Size = new Size(70, 30), Enabled = false };
+            var btnCheck = new Button { Text = "Проверить (nslookup)", Location = new Point(16, 108), Size = new Size(150, 30) };
+            var btnPing = new Button { Text = "Ping", Location = new Point(174, 108), Size = new Size(70, 30) };
+            var chkPingT = new CheckBox { Text = "-t (непрерывно)", Location = new Point(250, 113), AutoSize = true };
+            var btnPingStop = new Button { Text = "Стоп", Location = new Point(400, 108), Size = new Size(70, 30), Enabled = false };
 
             var btnClose = new Button
             {
                 Text = "Закрыть",
                 DialogResult = DialogResult.Cancel,
-                Location = new Point(534, 98),
+                Location = new Point(534, 108),
                 Size = new Size(70, 30),
                 Anchor = AnchorStyles.Top | AnchorStyles.Right
             };
 
             var txtOutput = new TextBox
             {
-                Location = new Point(16, 140),
+                Location = new Point(16, 150),
                 Size = new Size(588, 280),
                 Multiline = true,
                 ReadOnly = true,

@@ -51,7 +51,7 @@ namespace DnsToolWinForms
 
             var lblType = new Label { Text = "Тип записи:", Location = new Point(16, 62), AutoSize = true };
             var cmbType = new ComboBox { Location = new Point(140, 58), Width = 120, DropDownStyle = ComboBoxStyle.DropDownList };
-            cmbType.Items.AddRange(new object[] { "A", "AAAA", "CNAME", "PTR", "TXT", "SRV" });
+            cmbType.Items.AddRange(new object[] { "A", "AAAA", "CNAME", "PTR", "NS", "MX", "TXT", "SRV" });
             cmbType.SelectedItem = cmbType.Items.Contains(currentType) ? currentType : "A";
 
             var lblName = new Label { Text = "Имя:", Location = new Point(16, 100), AutoSize = true };
@@ -62,7 +62,7 @@ namespace DnsToolWinForms
 
             var lblSrvHint = new Label
             {
-                Text = "Ниже - только для SRV:",
+                Text = "Ниже - для SRV (все 3 поля) / MX (только Priority = Preference):",
                 ForeColor = Color.DimGray,
                 Location = new Point(16, 176),
                 AutoSize = true

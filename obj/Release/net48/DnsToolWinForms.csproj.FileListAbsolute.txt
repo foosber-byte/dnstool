@@ -1,0 +1,14 @@
+C:\Users\Kertee\dnstool\bin\Release\net48\DNS Server Tool.exe.config
+C:\Users\Kertee\dnstool\bin\Release\net48\DNS Server Tool.exe
+C:\Users\Kertee\dnstool\bin\Release\net48\DNS Server Tool.pdb
+C:\Users\Kertee\dnstool\bin\Release\net48\System.Management.Automation.dll
+C:\Users\Kertee\dnstool\obj\Release\net48\DnsToolWinForms.csproj.AssemblyReference.cache
+C:\Users\Kertee\dnstool\obj\Release\net48\DnsToolWinForms.GeneratedMSBuildEditorConfig.editorconfig
+C:\Users\Kertee\dnstool\obj\Release\net48\DnsToolWinForms.AssemblyInfoInputs.cache
+C:\Users\Kertee\dnstool\obj\Release\net48\DnsToolWinForms.AssemblyInfo.cs
+C:\Users\Kertee\dnstool\obj\Release\net48\DnsToolWinForms.csproj.CoreCompileInputs.cache
+C:\Users\Kertee\dnstool\obj\Release\net48\DnsToolWinForms.sourcelink.json
+C:\Users\Kertee\dnstool\obj\Release\net48\DnsToolW.65703AB7.Up2Date
+C:\Users\Kertee\dnstool\obj\Release\net48\DNS Server Tool.exe
+C:\Users\Kertee\dnstool\obj\Release\net48\DNS Server Tool.pdb
+C:\Users\Kertee\dnstool\obj\Release\net48\DNS Server Tool.exe.config

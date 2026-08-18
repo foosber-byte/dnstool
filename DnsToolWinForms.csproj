@@ -22,9 +22,10 @@
     <Product>DNS Server Tool</Product>
     <Authors>Kuzanov.e</Authors>
     <Copyright>© Kuzanov.e, 2026</Copyright>
-    <!-- Версия-счётчик: увеличивается на 1 после каждой правки (v1.9.<N>) - так по exe/окну
-         сразу видно, какая сборка сейчас развёрнута, без сверки с датой файла. -->
-    <AssemblyTitle>DNS Server Tool v1.9.8</AssemblyTitle>
+    <!-- Версия-счётчик: увеличивается после каждой значимой правки. v2.0 - крупная веха
+         (аутентификация на удалённом сервере через CimSession/HTTPS, NS/MX, файловый режим
+         для Secondary-зон, фикс многоуровневых имён записей). Дальше снова v2.0.<N>. -->
+    <AssemblyTitle>DNS Server Tool v2.0</AssemblyTitle>
     <Description>Инструмент управления DNS-сервером Windows: зоны, Zone Scopes, записи, подсети, политики.</Description>
 
     <!-- Иконка exe (проводник, панель задач, свойства файла). Обязательно положи файл icon.ico

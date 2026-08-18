@@ -1,6 +1,6 @@
 [Русская версия](README.md)
 
-# DNS Server Tool for Windows-base DNS Servers
+# DnsToolWinForms
 
 A simple WinForms app for managing a Windows DNS Server — covering what the built-in
 `dnsmgmt.msc` snap-in doesn't: zones (AD-integrated and file-based), Zone Scopes, records
@@ -9,7 +9,7 @@ inside a scope (A/AAAA/CNAME/PTR/TXT/SRV), client subnets, and Query Resolution 
 It works through the built-in `DnsServer` PowerShell module — the app must run **on the DNS
 server itself**, as administrator.
 
-Author: Kuzanov.E (foosber@gmail.com), 2026.
+Author: Kuzanov.e, 2026.
 
 ## Requirements
 
@@ -165,9 +165,9 @@ The zone list shows a short `[AD]` / `[file]` tag next to the name (based on the
 ### Scopes and records
 `Get/Add/Remove-DnsServerZoneScope`, plus type-specific cmdlets for adding records:
 
-| Type  | Cmdlet                              | Value parameter      |
-|-------|-------------------------------------|----------------------|
-| A     | `Add-DnsServerResourceRecordA`      | `-IPv4Address`       |
+| Type  | Cmdlet                              | Value parameter    |
+|-------|--------------------------------------|---------------------|
+| A     | `Add-DnsServerResourceRecordA`      | `-IPv4Address`      |
 | AAAA  | `Add-DnsServerResourceRecordAAAA`   | `-IPv6Address`       |
 | CNAME | `Add-DnsServerResourceRecordCName`  | `-HostNameAlias`     |
 | PTR   | `Add-DnsServerResourceRecordPtr`    | `-PtrDomainName`     |
@@ -335,25 +335,31 @@ program (usually Notepad).
   **all real properties** of the object into the log, so you can see the exact property
   names instead of guessing (see the `Criteria`/`Content` story above).
 
+## Things you could add yourself
+
+- Viewing/deleting records outside a scope (directly in the zone itself, with no scope
+  binding) — can be added by following the pattern already in place for scope records.
+- Support for other record types (NS, MX, etc.) — the pattern already exists in
+  `AddRecordToScopeAsync`; just add another `case` with the right cmdlet/parameter.
+- Input validation (IP addresses, CIDR) is minimal — format errors get passed straight into
+  the output panel from PowerShell/the DNS server as-is.
+
 ## License
 
-MIT — use it, change it however you like. The only
+MIT — use it, fork it, change it however you like, including commercially. The only
 condition is keeping the attribution notice (the `LICENSE` file). No warranties: this tool
 writes directly to your DNS server's configuration — test it on a non-critical environment
 before using it in production.
 
 ## Support the author
 
-If this tool was useful, you're welcome to send a bit of crypto for the author support:
+If this tool was useful, you're welcome to send a bit of crypto:
 
 - **USDT (TRC20 / TRON network):**
   `TQp9az9Nbnojg65qwvRjhwRkEnwEfFHK77`
 
 - **ETH (Ethereum network, ERC20):**
   `0x40d1775df43a9ff67aabe21ccb000421c0d6f092`
-
-- **BTC:**
-  `1K59KysN6svvzGmaRDsvcY8eD2vrLyYUuv`
 
 ⚠️ Double-check the network before sending — a transfer on the wrong network may not arrive.
 
