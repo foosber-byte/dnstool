@@ -15,6 +15,7 @@ namespace DnsToolWinForms
     {
         // ---- целевой сервер (глобально, для всех вкладок) ----
         private CheckBox chkLocalServer;
+        private readonly ToolTip _toolTip = new ToolTip();
         private ComboBox cmbTargetServer;
 
         // ---- общий блок вывода ----
@@ -90,7 +91,7 @@ namespace DnsToolWinForms
 
         private void InitializeComponent()
         {
-            Text = "DNS Server Tool v2.0";
+            Text = "DNS Server Tool v2.0.1";
             Width = 1050;
             Height = 810;
             StartPosition = FormStartPosition.CenterScreen;
@@ -241,14 +242,7 @@ namespace DnsToolWinForms
             var btnTestConnection = new Button { Text = "Проверить подключение", AutoSize = true, Margin = new Padding(0, 2, 0, 0) };
             btnTestConnection.Click += async (s, e) => await TestTargetServerConnectionAsync();
 
-            var hint = new Label
-            {
-                Text = "  (нужен WinRM и права на удалённом сервере)",
-                AutoSize = true,
-                ForeColor = Color.DimGray,
-                Font = new Font(Font, FontStyle.Italic),
-                Margin = new Padding(4, 6, 0, 0)
-            };
+            var hint = HelpIcon.Create(_toolTip, "Нужен WinRM и права на управление DNS на удалённом сервере.");
 
             row.Controls.Add(chkLocalServer);
             row.Controls.Add(cmbTargetServer);
@@ -501,6 +495,13 @@ namespace DnsToolWinForms
             var btnRemove = new Button { Text = "Удалить выбранную зону", AutoSize = true };
             btnRemove.Click += async (s, e) => await RemoveZoneAsync();
 
+            var btnReloadZone = new Button { Text = "Перезагрузить зону", AutoSize = true };
+            btnReloadZone.Click += async (s, e) => await ReloadSelectedZoneAsync();
+            var hintReloadZone = HelpIcon.Create(_toolTip,
+                "Перечитывает зону с диска (dnscmd /ZoneReload) - без перезапуска всей службы DNS. " +
+                "Полезно, если запись поправили в обход приложения. Выполняется ВСЕГДА локально, " +
+                "на этой машине - не учитывает настройку \"Целевой сервер\" сверху.");
+
             // Фильтр + сортировка + экспорт - применяются к тому, что уже загружено (без нового
             // обращения к серверу), поэтому реагируют мгновенно по мере ввода.
             txtZoneFilter = new TextBox { Width = 200, Margin = new Padding(2) };
@@ -525,7 +526,7 @@ namespace DnsToolWinForms
             var column = Column(
                 Row(btnRefresh),
                 Row(new Label { Text = "Новая зона:", AutoSize = true, Margin = new Padding(4, 8, 4, 2) },
-                    txtNewZoneName, cmbZoneType, btnAdd, btnRemove),
+                    txtNewZoneName, cmbZoneType, btnAdd, btnRemove, btnReloadZone, hintReloadZone),
                 Row(new Label { Text = "Фильтр:", AutoSize = true, Margin = new Padding(4, 8, 0, 2) }, txtZoneFilter,
                     new Label { Text = "Сортировка:", AutoSize = true, Margin = new Padding(8, 8, 0, 2) }, cmbZoneSort, btnZoneSortDir,
                     btnExportZones)
@@ -688,6 +689,32 @@ namespace DnsToolWinForms
             await RefreshZonesAsync();
         }
 
+        /// <summary>
+        /// Перезагружает выбранную зону с диска (dnscmd /ZoneReload) - тот же механизм, что уже
+        /// используется в файловом режиме для Secondary-зон, но теперь доступен напрямую для
+        /// любой зоны: полезно, если запись поправили в обход приложения (руками в файле) и
+        /// нужно, чтобы DNS Server перечитал её без перезапуска всей службы.
+        /// </summary>
+        private async Task ReloadSelectedZoneAsync()
+        {
+            if (lstZones.SelectedItem == null)
+            {
+                AppendLog("Сначала выбери зону в списке.");
+                return;
+            }
+
+            var zoneName = lstZones.SelectedItem.ToString().Split('[')[0].Trim();
+            AppendLog($"Перезагружаю зону '{zoneName}' (dnscmd /ZoneReload)...");
+
+            var result = await Task.Run(() => RunDnscmdZoneReload(zoneName));
+            AppendLog(result);
+
+            var success = result.StartsWith("OK");
+            FileLogger.LogChange("ZONE RELOAD", zoneName, "dnscmd /ZoneReload", success, success ? null : result);
+
+            await RefreshZonesAsync();
+        }
+
         // ============================================================
         //  Вкладка "Scopes и записи"
         // ============================================================
@@ -831,17 +858,10 @@ namespace DnsToolWinForms
                 await RefreshRecordsAsync();
             };
 
-            var hint = new Label
-            {
-                Text = "Запись добавляется ИМЕННО в scope, указанный в поле выше (не в саму зону целиком). " +
-                       "Для записи в корне зоны (SOA/NS/SPF и т.п.) в поле имени укажи \"@\". " +
-                       "Двойной клик по записи справа - изменить; правая кнопка мыши - меню (проверить/изменить/удалить).",
-                AutoSize = true,
-                ForeColor = Color.DimGray,
-                Font = new Font(Font, FontStyle.Italic),
-                Margin = new Padding(4, 0, 4, 6),
-                MaximumSize = new Size(900, 0)
-            };
+            var hint = HelpIcon.Create(_toolTip,
+                "Запись добавляется ИМЕННО в scope, указанный в поле выше (не в саму зону целиком).\n" +
+                "Для записи в корне зоны (SOA/NS/SPF и т.п.) в поле имени укажи \"@\".\n" +
+                "Двойной клик по записи справа - изменить; правая кнопка мыши - меню (проверить/изменить/удалить).");
 
             var column = Column(
                 Row(new Label { Text = "Зона:", AutoSize = true, Margin = new Padding(4, 8, 4, 2) }, cmbScopeZoneName, btnLoadZoneNames, btnLoadScopes),
@@ -849,13 +869,12 @@ namespace DnsToolWinForms
                 Row(new Label { Text = "Записи scope:", AutoSize = true, Margin = new Padding(4, 8, 4, 2) },
                     txtRecordScopeName, btnLoadRecords),
                 Row(new Label { Text = "Новая запись:", AutoSize = true, Margin = new Padding(4, 8, 4, 2) },
-                    cmbNewRecordType, txtRecordName, txtRecordValue, btnAddRecord),
-                Row(new Label { Text = "  ...для SRV/MX:", AutoSize = true, Margin = new Padding(4, 4, 4, 2), ForeColor = Color.DimGray },
+                    cmbNewRecordType, txtRecordName, txtRecordValue, btnAddRecord, hint),
+                Row(HelpIcon.Create(_toolTip, "Эти три поля используются только для типов SRV и MX. Для остальных типов записей они игнорируются."),
                     new Label { Text = "Priority/Preference", AutoSize = true, Margin = new Padding(4, 8, 0, 2) }, txtSrvPriority,
                     new Label { Text = "Weight (SRV)", AutoSize = true, Margin = new Padding(4, 8, 0, 2) }, txtSrvWeight,
                     new Label { Text = "Port (SRV)", AutoSize = true, Margin = new Padding(4, 8, 0, 2) }, txtSrvPort),
-                Row(new Label { Text = "", AutoSize = true, Margin = new Padding(4, 0, 4, 2), Width = 1 }, btnAddRecordFile),
-                Row(hint)
+                Row(new Label { Text = "", AutoSize = true, Margin = new Padding(4, 0, 4, 2), Width = 1 }, btnAddRecordFile)
             );
 
             return WrapTabTwoLists("Scopes и записи", column,
