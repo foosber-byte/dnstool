@@ -55,4 +55,14 @@
   </ItemGroup>
   -->
 
+  <!-- Баннер для окна "О программе" (AboutDialog.cs) - в отличие от icon.ico (встраивается
+       в exe как Win32-ресурс через ApplicationIcon), banner.png читается в рантайме обычным
+       File.Exists/Image.FromFile, поэтому SDK-style проект должен явно скопировать его рядом
+       с exe - без этой строки он остался бы только в папке с исходниками. -->
+  <ItemGroup>
+    <None Update="banner.png">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
 </Project>

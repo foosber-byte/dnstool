@@ -147,26 +147,34 @@ namespace DnsToolWinForms
 
             // Маленькая версия значка приложения рядом с подписью - тот же приглушённый стиль
             // футера, минимальный визуальный след (не баннер, просто тихий бренд-штрих).
+            // Кликабельно - открывает "О программе" с полным баннером (единственное место,
+            // где он показывается целиком).
             if (AppIcon.Current != null)
             {
-                footerRow.Controls.Add(new PictureBox
+                var picLogo = new PictureBox
                 {
                     Image = AppIcon.Current.ToBitmap(),
                     SizeMode = PictureBoxSizeMode.Zoom,
                     Size = new Size(16, 16),
-                    Margin = new Padding(0, 1, 4, 0)
-                });
+                    Margin = new Padding(0, 1, 4, 0),
+                    Cursor = Cursors.Hand
+                };
+                picLogo.Click += (s, e) => AboutDialog.Show();
+                footerRow.Controls.Add(picLogo);
             }
 
-            footerRow.Controls.Add(new Label
+            var lblFooterText = new Label
             {
                 Text = "Создано by Kuzanov.e, 2026",
                 AutoSize = true,
                 TextAlign = ContentAlignment.MiddleRight,
                 ForeColor = Color.Gray,
                 Font = new Font("Segoe UI", 8F, FontStyle.Italic),
-                Margin = new Padding(0, 3, 0, 0)
-            });
+                Margin = new Padding(0, 3, 0, 0),
+                Cursor = Cursors.Hand
+            };
+            lblFooterText.Click += (s, e) => AboutDialog.Show();
+            footerRow.Controls.Add(lblFooterText);
 
             footer.Controls.Add(footerRow);
 
