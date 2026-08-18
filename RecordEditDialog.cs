@@ -35,55 +35,49 @@ namespace DnsToolWinForms
                 MaximizeBox = false,
                 MinimizeBox = false,
                 ShowInTaskbar = false,
-                ClientSize = new Size(440, 330),
+                ClientSize = new Size(440, 270),
                 Font = new Font("Segoe UI", 9F),
                 Icon = AppIcon.Current
             };
 
-            var lblNote = new Label
-            {
-                Text = "Запись будет пересоздана с новыми значениями (сначала добавляется новая, потом удаляется старая).",
-                ForeColor = Color.DimGray,
-                Font = new Font("Segoe UI", 8.5F, FontStyle.Italic),
-                Location = new Point(16, 12),
-                Size = new Size(408, 40)
-            };
+            var toolTip = new ToolTip();
 
-            var lblType = new Label { Text = "Тип записи:", Location = new Point(16, 62), AutoSize = true };
-            var cmbType = new ComboBox { Location = new Point(140, 58), Width = 120, DropDownStyle = ComboBoxStyle.DropDownList };
+            var lblType = new Label { Text = "Тип записи:", Location = new Point(16, 24), AutoSize = true };
+            var cmbType = new ComboBox { Location = new Point(140, 20), Width = 120, DropDownStyle = ComboBoxStyle.DropDownList };
             cmbType.Items.AddRange(new object[] { "A", "AAAA", "CNAME", "PTR", "NS", "MX", "TXT", "SRV" });
             cmbType.SelectedItem = cmbType.Items.Contains(currentType) ? currentType : "A";
+            var hintNote = HelpIcon.Create(toolTip,
+                "Запись будет пересоздана с новыми значениями: сначала добавляется новая, " +
+                "и только при успехе удаляется старая - исходная запись не теряется при сбое.");
+            hintNote.Location = new Point(268, 22);
 
-            var lblName = new Label { Text = "Имя:", Location = new Point(16, 100), AutoSize = true };
-            var txtName = new TextBox { Location = new Point(140, 96), Width = 280, Text = currentName };
+            var lblName = new Label { Text = "Имя:", Location = new Point(16, 62), AutoSize = true };
+            var txtName = new TextBox { Location = new Point(140, 58), Width = 280, Text = currentName };
 
-            var lblValue = new Label { Text = "Значение:", Location = new Point(16, 138), AutoSize = true };
-            var txtValue = new TextBox { Location = new Point(140, 134), Width = 280, Text = currentValue };
+            var lblValue = new Label { Text = "Значение:", Location = new Point(16, 100), AutoSize = true };
+            var txtValue = new TextBox { Location = new Point(140, 96), Width = 280, Text = currentValue };
 
-            var lblSrvHint = new Label
-            {
-                Text = "Ниже - для SRV (все 3 поля) / MX (только Priority = Preference):",
-                ForeColor = Color.DimGray,
-                Location = new Point(16, 176),
-                AutoSize = true
-            };
+            var lblPriority = new Label { Text = "Priority:", Location = new Point(16, 138), AutoSize = true };
+            var txtPriority = new TextBox { Location = new Point(90, 134), Width = 60, Text = string.IsNullOrEmpty(currentPriority) ? "10" : currentPriority };
 
-            var lblPriority = new Label { Text = "Priority:", Location = new Point(16, 204), AutoSize = true };
-            var txtPriority = new TextBox { Location = new Point(90, 200), Width = 60, Text = string.IsNullOrEmpty(currentPriority) ? "10" : currentPriority };
+            var lblWeight = new Label { Text = "Weight:", Location = new Point(160, 138), AutoSize = true };
+            var txtWeight = new TextBox { Location = new Point(230, 134), Width = 60, Text = string.IsNullOrEmpty(currentWeight) ? "10" : currentWeight };
 
-            var lblWeight = new Label { Text = "Weight:", Location = new Point(160, 204), AutoSize = true };
-            var txtWeight = new TextBox { Location = new Point(230, 200), Width = 60, Text = string.IsNullOrEmpty(currentWeight) ? "10" : currentWeight };
+            var lblPort = new Label { Text = "Port:", Location = new Point(300, 138), AutoSize = true };
+            var txtPort = new TextBox { Location = new Point(350, 134), Width = 70, Text = string.IsNullOrEmpty(currentPort) ? "443" : currentPort };
 
-            var lblPort = new Label { Text = "Port:", Location = new Point(300, 204), AutoSize = true };
-            var txtPort = new TextBox { Location = new Point(350, 200), Width = 70, Text = string.IsNullOrEmpty(currentPort) ? "443" : currentPort };
+            var hintSrv = HelpIcon.Create(toolTip,
+                "Для SRV используются все три поля. Для MX - только Priority (это Preference); " +
+                "Weight и Port игнорируются. Для остальных типов записей эти поля не используются.");
+            hintSrv.Location = new Point(16, 160);
 
-            var btnCancel = new Button { Text = "Отмена", DialogResult = DialogResult.Cancel, Location = new Point(240, 260), Size = new Size(90, 32) };
-            var btnSave = new Button { Text = "Сохранить", DialogResult = DialogResult.OK, Location = new Point(336, 260), Size = new Size(90, 32) };
+            var btnCancel = new Button { Text = "Отмена", DialogResult = DialogResult.Cancel, Location = new Point(240, 200), Size = new Size(90, 32) };
+            var btnSave = new Button { Text = "Сохранить", DialogResult = DialogResult.OK, Location = new Point(336, 200), Size = new Size(90, 32) };
 
             dlg.Controls.AddRange(new Control[]
             {
-                lblNote, lblType, cmbType, lblName, txtName, lblValue, txtValue,
-                lblSrvHint, lblPriority, txtPriority, lblWeight, txtWeight, lblPort, txtPort,
+                lblType, cmbType, hintNote, lblName, txtName, lblValue, txtValue,
+                lblPriority, txtPriority, lblWeight, txtWeight, lblPort, txtPort, hintSrv,
                 btnCancel, btnSave
             });
             dlg.AcceptButton = btnSave;

@@ -25,7 +25,7 @@ namespace DnsToolWinForms
                 MaximizeBox = false,
                 MinimizeBox = false,
                 ShowInTaskbar = false,
-                ClientSize = new Size(420, 272),
+                ClientSize = new Size(420, 236),
                 Font = new Font("Segoe UI", 9F),
                 Icon = AppIcon.Current
             };
@@ -37,28 +37,24 @@ namespace DnsToolWinForms
                 Size = new Size(388, 40)
             };
 
-            var lblLogin = new Label { Text = "Логин:", Location = new Point(16, 66), AutoSize = true };
+            var toolTip = new ToolTip();
+
+            var lblLogin = new Label { Text = "Логин:", Location = new Point(16, 58), AutoSize = true };
             var txtLogin = new TextBox
             {
-                Location = new Point(110, 62),
-                Width = 294,
+                Location = new Point(110, 54),
+                Width = 270,
                 Text = "",
                 Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right
             };
+            var hintLogin = HelpIcon.Create(toolTip, "Например: DOMAIN\\user или user@domain.local");
+            hintLogin.Location = new Point(386, 55);
+            hintLogin.Anchor = AnchorStyles.Top | AnchorStyles.Right;
 
-            var lblLoginHint = new Label
-            {
-                Text = "например DOMAIN\\user или user@domain.local",
-                ForeColor = Color.DimGray,
-                Font = new Font("Segoe UI", 8F, FontStyle.Italic),
-                Location = new Point(110, 84),
-                AutoSize = true
-            };
-
-            var lblPassword = new Label { Text = "Пароль:", Location = new Point(16, 112), AutoSize = true };
+            var lblPassword = new Label { Text = "Пароль:", Location = new Point(16, 90), AutoSize = true };
             var txtPassword = new TextBox
             {
-                Location = new Point(110, 108),
+                Location = new Point(110, 86),
                 Width = 294,
                 UseSystemPasswordChar = true,
                 Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right
@@ -67,21 +63,16 @@ namespace DnsToolWinForms
             var chkUseSsl = new CheckBox
             {
                 Text = "Подключаться через HTTPS (WinRM, порт 5986)",
-                Location = new Point(110, 140),
+                Location = new Point(110, 120),
                 AutoSize = true
             };
-            var lblSslHint = new Label
-            {
-                Text = "требует HTTPS-листенер WinRM и валидный сертификат на сервере",
-                ForeColor = Color.DimGray,
-                Font = new Font("Segoe UI", 8F, FontStyle.Italic),
-                Location = new Point(110, 160),
-                AutoSize = true
-            };
+            var hintSsl = HelpIcon.Create(toolTip, "Требует HTTPS-листенер WinRM и валидный сертификат на целевом сервере.");
+            hintSsl.Location = new Point(388, 118);
+            hintSsl.Anchor = AnchorStyles.Top | AnchorStyles.Right;
 
             var progress = new ProgressBar
             {
-                Location = new Point(16, 188),
+                Location = new Point(16, 152),
                 Size = new Size(388, 18),
                 Style = ProgressBarStyle.Marquee,
                 MarqueeAnimationSpeed = 30,
@@ -90,7 +81,7 @@ namespace DnsToolWinForms
 
             var lblStatus = new Label
             {
-                Location = new Point(16, 188),
+                Location = new Point(16, 152),
                 Size = new Size(388, 40),
                 Font = new Font("Segoe UI", 9F, FontStyle.Bold),
                 Text = ""
@@ -100,7 +91,7 @@ namespace DnsToolWinForms
             {
                 Text = "Отмена",
                 DialogResult = DialogResult.Cancel,
-                Location = new Point(232, 228),
+                Location = new Point(232, 192),
                 Size = new Size(80, 32),
                 Anchor = AnchorStyles.Bottom | AnchorStyles.Right
             };
@@ -108,7 +99,7 @@ namespace DnsToolWinForms
             var btnLogin = new Button
             {
                 Text = "Войти",
-                Location = new Point(324, 228),
+                Location = new Point(324, 192),
                 Size = new Size(80, 32),
                 Anchor = AnchorStyles.Bottom | AnchorStyles.Right
             };
@@ -177,8 +168,8 @@ namespace DnsToolWinForms
 
             dlg.Controls.AddRange(new Control[]
             {
-                lblInfo, lblLogin, txtLogin, lblLoginHint, lblPassword, txtPassword,
-                chkUseSsl, lblSslHint, progress, lblStatus, btnCancel, btnLogin
+                lblInfo, lblLogin, txtLogin, hintLogin, lblPassword, txtPassword,
+                chkUseSsl, hintSsl, progress, lblStatus, btnCancel, btnLogin
             });
             dlg.AcceptButton = btnLogin;
             dlg.CancelButton = btnCancel;

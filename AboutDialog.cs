@@ -71,7 +71,7 @@ namespace DnsToolWinForms
                 y += height;
             }
 
-            AddCenteredLabel("Версия: см. заголовок окна (v2.0)", new Font("Segoe UI", 9F), Color.DimGray, 22);
+            AddCenteredLabel("Версия: см. заголовок окна (v2.0.1)", new Font("Segoe UI", 9F), Color.DimGray, 22);
             AddCenteredLabel("Автор: Kuzanov.e, 2026", new Font("Segoe UI", 9F), Color.DimGray, 22);
             AddCenteredLabel("Лицензия: MIT - свободное использование, изменение, форк", new Font("Segoe UI", 8.5F), Color.Gray, 20);
 
