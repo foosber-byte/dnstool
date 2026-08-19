@@ -21,6 +21,92 @@ namespace DnsToolWinForms
         /// </summary>
         public static string ComputerName { get; set; } = "";
 
+        // Активная CimSession с явными кредами (если авторизовались вручную через ServerAuthDialog)
+        // и сервер, для которого она создана. Пока эти два совпадают с текущим ComputerName -
+        // используем именно её вместо -ComputerName (иначе PowerShell снова попробует текущую
+        // Windows-учётку и получит тот же отказ в правах).
+        private static object _activeCimSession;
+        private static string _activeCimSessionComputer;
+
+        /// <summary>
+        /// Пробует создать CimSession с явно указанными логином/паролем (New-CimSession -Credential).
+        /// У командлетов модуля DnsServer нет собственного параметра -Credential - единственный
+        /// официальный способ подключиться под другой учёткой - через уже готовую CimSession.
+        /// При успехе сессия сохраняется и автоматически используется во всех дальнейших вызовах
+        /// Invoke() для этого же сервера, пока не сменится целевой сервер или не завершится приложение.
+        /// </summary>
+        /// <param name="password">
+        /// Пароль уже в виде SecureString - строится сразу в UI посимвольно, минуя лишний
+        /// plain-string на этом уровне (меньше времени пароль существует в памяти как обычная строка).
+        /// </param>
+        /// <param name="useSsl">
+        /// Если true - WinRM идёт через HTTPS (порт 5986) вместо HTTP (5985), полное TLS-шифрование
+        /// транспорта поверх и так уже зашифрованных Kerberos/NTLM-сообщений. Требует валидного
+        /// сертификата на целевом сервере и включённого HTTPS-листенера WinRM.
+        /// </param>
+        public static (bool Success, string Error) TryAuthenticate(string computerName, string username, System.Security.SecureString password, bool useSsl)
+        {
+            try
+            {
+                var credential = new PSCredential(username, password);
+
+                using var ps = PowerShell.Create();
+                ps.AddCommand("New-CimSession")
+                  .AddParameter("ComputerName", computerName)
+                  .AddParameter("Credential", credential);
+                if (useSsl) ps.AddParameter("UseSSL");
+                ps.AddParameter("ErrorAction", "Stop");
+
+                var results = ps.Invoke();
+
+                if (ps.HadErrors)
+                {
+                    var err = ps.Streams.Error.FirstOrDefault();
+                    var msg = err != null ? DescribeException(err.Exception) : "неизвестная ошибка при создании сессии";
+                    return (false, msg);
+                }
+
+                var session = results.FirstOrDefault()?.BaseObject;
+                if (session == null)
+                    return (false, "New-CimSession не вернул объект сессии");
+
+                DisposeActiveCimSession(); // закрываем предыдущую, если была - не плодим висящие подключения
+                _activeCimSession = session;
+                _activeCimSessionComputer = computerName;
+                return (true, null);
+            }
+            catch (System.Exception ex)
+            {
+                return (false, DescribeException(ex));
+            }
+        }
+
+        /// <summary>Закрывает и забывает активную CimSession, если она есть.</summary>
+        public static void DisposeActiveCimSession()
+        {
+            if (_activeCimSession is IDisposable disposable)
+            {
+                try { disposable.Dispose(); } catch { /* сессия уже могла отвалиться сама - не критично */ }
+            }
+            _activeCimSession = null;
+            _activeCimSessionComputer = null;
+        }
+
+        /// <summary>
+        /// Вызывать при смене целевого сервера в UI - если активная CimSession была для ДРУГОГО
+        /// сервера, она больше не актуальна и её надо закрыть (иначе следующий вызов Invoke()
+        /// попробует использовать чужую сессию не по адресу).
+        /// </summary>
+        public static void InvalidateCimSessionIfServerChanged(string newComputerName)
+        {
+            var normalized = (newComputerName ?? "").Trim();
+            if (_activeCimSession != null &&
+                !string.Equals(_activeCimSessionComputer, normalized, StringComparison.OrdinalIgnoreCase))
+            {
+                DisposeActiveCimSession();
+            }
+        }
+
         /// <summary>
         /// Выполняет один командлет с параметрами. Возвращает (результаты, текстовый лог для блока вывода).
         /// </summary>
@@ -53,7 +139,17 @@ namespace DnsToolWinForms
             if (applyGlobalComputerName && !string.IsNullOrWhiteSpace(ComputerName) &&
                 (parameters == null || !parameters.ContainsKey("ComputerName")))
             {
-                ps.AddParameter("ComputerName", ComputerName.Trim());
+                if (_activeCimSession != null &&
+                    string.Equals(_activeCimSessionComputer, ComputerName.Trim(), StringComparison.OrdinalIgnoreCase))
+                {
+                    // Есть готовая сессия с явными кредами для именно этого сервера - используем её
+                    // вместо -ComputerName, иначе PowerShell снова попробует текущую Windows-учётку.
+                    ps.AddParameter("CimSession", _activeCimSession);
+                }
+                else
+                {
+                    ps.AddParameter("ComputerName", ComputerName.Trim());
+                }
             }
 
             List<PSObject> results;

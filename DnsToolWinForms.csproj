@@ -22,9 +22,10 @@
     <Product>DNS Server Tool</Product>
     <Authors>Kuzanov.e</Authors>
     <Copyright>© Kuzanov.e, 2026</Copyright>
-    <!-- Версия-счётчик: увеличивается на 1 после каждой правки (v1.9.<N>) - так по exe/окну
-         сразу видно, какая сборка сейчас развёрнута, без сверки с датой файла. -->
-    <AssemblyTitle>DNS Server Tool v1.9.8</AssemblyTitle>
+    <!-- Версия-счётчик: v2.0 - крупная веха (аутентификация, NS/MX, файловый режим для
+         Secondary-зон, фикс многоуровневых имён записей). Дальше мелкие правки идут как
+         v2.0.<N> (например v2.0.1), а следующая крупная веха - v2.1 или v3.0. -->
+    <AssemblyTitle>DNS Server Tool v2.0.3</AssemblyTitle>
     <Description>Инструмент управления DNS-сервером Windows: зоны, Zone Scopes, записи, подсети, политики.</Description>
 
     <!-- Иконка exe (проводник, панель задач, свойства файла). Обязательно положи файл icon.ico
@@ -40,6 +41,14 @@
     <PackageReference Include="Microsoft.PowerShell.5.1.ReferenceAssemblies" Version="1.0.0" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Нужны для UpdateChecker.cs (проверка обновлений через GitHub Releases): распаковка zip
+         и HTTP-запросы. В .NET Framework (в отличие от .NET Core/5+) ZipFile - это ОТДЕЛЬНАЯ
+         сборка System.IO.Compression.FileSystem, не входит в базовый System.IO.Compression. -->
+    <Reference Include="System.IO.Compression.FileSystem" />
+    <Reference Include="System.Net.Http" />
+  </ItemGroup>
+
   <!--
     ЕСЛИ NuGet не найдёт пакет Microsoft.PowerShell.5.1.ReferenceAssemblies (бывает, что он
     называется/версионируется иначе на разных машинах) - раскомментируй блок ниже и
@@ -53,5 +62,15 @@
     </Reference>
   </ItemGroup>
   -->
+
+  <!-- Баннер для окна "О программе" (AboutDialog.cs) - в отличие от icon.ico (встраивается
+       в exe как Win32-ресурс через ApplicationIcon), banner.png читается в рантайме обычным
+       File.Exists/Image.FromFile, поэтому SDK-style проект должен явно скопировать его рядом
+       с exe - без этой строки он остался бы только в папке с исходниками. -->
+  <ItemGroup>
+    <None Update="banner.png">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
 
 </Project>

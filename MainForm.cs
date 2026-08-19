@@ -15,6 +15,7 @@ namespace DnsToolWinForms
     {
         // ---- целевой сервер (глобально, для всех вкладок) ----
         private CheckBox chkLocalServer;
+        private readonly ToolTip _toolTip = new ToolTip();
         private ComboBox cmbTargetServer;
 
         // ---- общий блок вывода ----
@@ -81,6 +82,7 @@ namespace DnsToolWinForms
                 await RefreshZonesAsync();
                 await RefreshAllZoneCombosAsync();
             };
+            FormClosing += (s, e) => DnsHelper.DisposeActiveCimSession();
         }
 
         // ============================================================
@@ -89,7 +91,7 @@ namespace DnsToolWinForms
 
         private void InitializeComponent()
         {
-            Text = "DNS Server Tool v1.9.8";
+            Text = $"DNS Server Tool v{AppVersion.Current}";
             Width = 1050;
             Height = 810;
             StartPosition = FormStartPosition.CenterScreen;
@@ -128,16 +130,54 @@ namespace DnsToolWinForms
 
             var outputPanel = BuildOutputPanel();
 
-            var footer = new Label
+            var footer = new Panel
             {
-                Text = "Создано by Kuzanov.e, 2026",
                 Dock = DockStyle.Bottom,
                 Height = 20,
+                BackColor = Color.WhiteSmoke
+            };
+
+            var footerRow = new FlowLayoutPanel
+            {
+                Dock = DockStyle.Right,
+                FlowDirection = FlowDirection.LeftToRight,
+                AutoSize = true,
+                WrapContents = false,
+                Padding = new Padding(0, 2, 6, 0)
+            };
+
+            // Маленькая версия значка приложения рядом с подписью - тот же приглушённый стиль
+            // футера, минимальный визуальный след (не баннер, просто тихий бренд-штрих).
+            // Кликабельно - открывает "О программе" с полным баннером (единственное место,
+            // где он показывается целиком).
+            if (AppIcon.Current != null)
+            {
+                var picLogo = new PictureBox
+                {
+                    Image = AppIcon.Current.ToBitmap(),
+                    SizeMode = PictureBoxSizeMode.Zoom,
+                    Size = new Size(16, 16),
+                    Margin = new Padding(0, 1, 4, 0),
+                    Cursor = Cursors.Hand
+                };
+                picLogo.Click += (s, e) => AboutDialog.Show();
+                footerRow.Controls.Add(picLogo);
+            }
+
+            var lblFooterText = new Label
+            {
+                Text = "Создано by Kuzanov.e, 2026",
+                AutoSize = true,
                 TextAlign = ContentAlignment.MiddleRight,
                 ForeColor = Color.Gray,
                 Font = new Font("Segoe UI", 8F, FontStyle.Italic),
-                BackColor = Color.WhiteSmoke
+                Margin = new Padding(0, 3, 0, 0),
+                Cursor = Cursors.Hand
             };
+            lblFooterText.Click += (s, e) => AboutDialog.Show();
+            footerRow.Controls.Add(lblFooterText);
+
+            footer.Controls.Add(footerRow);
 
             // Порядок добавления важен: то, что снизу (Dock=Bottom), добавляем первым,
             // а Fill - последним, чтобы он занял оставшееся место.
@@ -202,14 +242,7 @@ namespace DnsToolWinForms
             var btnTestConnection = new Button { Text = "Проверить подключение", AutoSize = true, Margin = new Padding(0, 2, 0, 0) };
             btnTestConnection.Click += async (s, e) => await TestTargetServerConnectionAsync();
 
-            var hint = new Label
-            {
-                Text = "  (нужен WinRM и права на удалённом сервере)",
-                AutoSize = true,
-                ForeColor = Color.DimGray,
-                Font = new Font(Font, FontStyle.Italic),
-                Margin = new Padding(4, 6, 0, 0)
-            };
+            var hint = HelpIcon.Create(_toolTip, "Нужен WinRM и права на управление DNS на удалённом сервере.");
 
             row.Controls.Add(chkLocalServer);
             row.Controls.Add(cmbTargetServer);
@@ -223,6 +256,7 @@ namespace DnsToolWinForms
         private void UpdateTargetComputerName()
         {
             DnsHelper.ComputerName = chkLocalServer.Checked ? "" : cmbTargetServer.Text.Trim();
+            DnsHelper.InvalidateCimSessionIfServerChanged(DnsHelper.ComputerName);
         }
 
         private async Task TestTargetServerConnectionAsync()
@@ -234,8 +268,31 @@ namespace DnsToolWinForms
 
             var (results, log) = await Task.Run(() => DnsHelper.Invoke("Get-DnsServerZone"));
             AppendLog(log);
+
             if (WasSuccess(log))
+            {
                 AppendLog($"OK: подключение работает, зон видно: {results.Count}");
+                return;
+            }
+
+            // Обычная проверка не удалась - для удалённого сервера предлагаем ввести другие
+            // учётные данные (текущая Windows-учётка может просто не иметь прав на этом сервере).
+            if (!chkLocalServer.Checked && !string.IsNullOrEmpty(target))
+            {
+                AppendLog("Подключение не удалось текущей учётной записью - предлагаю ввести другие данные...");
+                var authOk = ServerAuthDialog.Show(target);
+                if (!authOk)
+                {
+                    AppendLog("Аутентификация отменена или не удалась - работаем без доступа к этому серверу.");
+                    return;
+                }
+
+                AppendLog("Повторно проверяю подключение с новыми учётными данными...");
+                var (retryResults, retryLog) = await Task.Run(() => DnsHelper.Invoke("Get-DnsServerZone"));
+                AppendLog(retryLog);
+                if (WasSuccess(retryLog))
+                    AppendLog($"OK: подключение работает, зон видно: {retryResults.Count}");
+            }
         }
 
         private Control BuildOutputPanel()
@@ -403,6 +460,8 @@ namespace DnsToolWinForms
             "AAAA" => "IPv6, напр. fe80::1",
             "CNAME" => "целевое имя (FQDN), напр. www.example.com",
             "PTR" => "целевое имя (FQDN) для reverse-записи",
+            "NS" => "имя сервера (FQDN), напр. ns1.example.com",
+            "MX" => "почтовый сервер (FQDN), напр. mail.example.com — приоритет в поле Priority/Preference",
             "TXT" => "текст записи, напр. v=spf1 include:_spf.example.com ~all",
             "SRV" => "целевой хост (Target), напр. sipserver.example.com",
             _ => "IPv4, напр. 10.0.1.10"
@@ -436,6 +495,13 @@ namespace DnsToolWinForms
             var btnRemove = new Button { Text = "Удалить выбранную зону", AutoSize = true };
             btnRemove.Click += async (s, e) => await RemoveZoneAsync();
 
+            var btnReloadZone = new Button { Text = "Перезагрузить зону", AutoSize = true };
+            btnReloadZone.Click += async (s, e) => await ReloadSelectedZoneAsync();
+            var hintReloadZone = HelpIcon.Create(_toolTip,
+                "Перечитывает зону с диска (dnscmd /ZoneReload) - без перезапуска всей службы DNS. " +
+                "Полезно, если запись поправили в обход приложения. Выполняется ВСЕГДА локально, " +
+                "на этой машине - не учитывает настройку \"Целевой сервер\" сверху.");
+
             // Фильтр + сортировка + экспорт - применяются к тому, что уже загружено (без нового
             // обращения к серверу), поэтому реагируют мгновенно по мере ввода.
             txtZoneFilter = new TextBox { Width = 200, Margin = new Padding(2) };
@@ -458,7 +524,7 @@ namespace DnsToolWinForms
             btnExportZones.Click += (s, e) => ExportListToFile(lstZones.Items.Cast<string>(), $"zones_{DateTime.Now:yyyyMMdd_HHmmss}.txt");
 
             var column = Column(
-                Row(btnRefresh),
+                Row(btnRefresh, btnReloadZone, hintReloadZone),
                 Row(new Label { Text = "Новая зона:", AutoSize = true, Margin = new Padding(4, 8, 4, 2) },
                     txtNewZoneName, cmbZoneType, btnAdd, btnRemove),
                 Row(new Label { Text = "Фильтр:", AutoSize = true, Margin = new Padding(4, 8, 0, 2) }, txtZoneFilter,
@@ -623,6 +689,32 @@ namespace DnsToolWinForms
             await RefreshZonesAsync();
         }
 
+        /// <summary>
+        /// Перезагружает выбранную зону с диска (dnscmd /ZoneReload) - тот же механизм, что уже
+        /// используется в файловом режиме для Secondary-зон, но теперь доступен напрямую для
+        /// любой зоны: полезно, если запись поправили в обход приложения (руками в файле) и
+        /// нужно, чтобы DNS Server перечитал её без перезапуска всей службы.
+        /// </summary>
+        private async Task ReloadSelectedZoneAsync()
+        {
+            if (lstZones.SelectedItem == null)
+            {
+                AppendLog("Сначала выбери зону в списке.");
+                return;
+            }
+
+            var zoneName = lstZones.SelectedItem.ToString().Split('[')[0].Trim();
+            AppendLog($"Перезагружаю зону '{zoneName}' (dnscmd /ZoneReload)...");
+
+            var result = await Task.Run(() => RunDnscmdZoneReload(zoneName));
+            AppendLog(result);
+
+            var success = result.StartsWith("OK");
+            FileLogger.LogChange("ZONE RELOAD", zoneName, "dnscmd /ZoneReload", success, success ? null : result);
+
+            await RefreshZonesAsync();
+        }
+
         // ============================================================
         //  Вкладка "Scopes и записи"
         // ============================================================
@@ -685,7 +777,7 @@ namespace DnsToolWinForms
             txtRecordName = Tb(140, "имя хоста (или @ для корня зоны)");
 
             cmbNewRecordType = new ComboBox { Width = 90, DropDownStyle = ComboBoxStyle.DropDownList };
-            cmbNewRecordType.Items.AddRange(new object[] { "A", "AAAA", "CNAME", "PTR", "TXT", "SRV" });
+            cmbNewRecordType.Items.AddRange(new object[] { "A", "AAAA", "CNAME", "PTR", "NS", "MX", "TXT", "SRV" });
             cmbNewRecordType.SelectedIndex = 0;
 
             txtRecordValue = Tb(220, "IPv4, напр. 10.0.1.10");
@@ -701,8 +793,13 @@ namespace DnsToolWinForms
             // Отдельный, явно подписанный "аварийный" путь для Secondary-зон, где обычный API
             // пишет отказ (WIN32 9611) - правит .dns-файл scope напрямую на ЭТОЙ машине и
             // перезагружает зону через dnscmd. См. AddRecordToScopeFileAsync().
-            var btnAddRecordFile = new Button { Text = "Добавить запись", AutoSize = true };
+            var btnAddRecordFile = new Button { Text = "Добавить запись в файл", AutoSize = true };
             btnAddRecordFile.Click += async (s, e) => await AddRecordToScopeFileAsync();
+            var hintAddRecordFile = HelpIcon.Create(_toolTip,
+                "Обходной путь для Secondary-зон (read-only): строка дописывается НАПРЯМУЮ в .dns-файл " +
+                "scope на этой машине, в обход обычного API, после чего зона перезагружается через " +
+                "dnscmd. Используй, только если обычная кнопка \"Добавить запись\" отказывает с ошибкой " +
+                "\"Недопустимый тип зоны DNS\" (WIN32 9611).");
 
             // Фильтр + сортировка + экспорт для записей - применяются мгновенно, без нового
             // обращения к серверу, к уже загруженному списку.
@@ -766,17 +863,10 @@ namespace DnsToolWinForms
                 await RefreshRecordsAsync();
             };
 
-            var hint = new Label
-            {
-                Text = "Запись добавляется ИМЕННО в scope, указанный в поле выше (не в саму зону целиком). " +
-                       "Для записи в корне зоны (SOA/NS/SPF и т.п.) в поле имени укажи \"@\". " +
-                       "Двойной клик по записи справа - изменить; правая кнопка мыши - меню (проверить/изменить/удалить).",
-                AutoSize = true,
-                ForeColor = Color.DimGray,
-                Font = new Font(Font, FontStyle.Italic),
-                Margin = new Padding(4, 0, 4, 6),
-                MaximumSize = new Size(900, 0)
-            };
+            var hint = HelpIcon.Create(_toolTip,
+                "Запись добавляется ИМЕННО в scope, указанный в поле выше (не в саму зону целиком).\n" +
+                "Для записи в корне зоны (SOA/NS/SPF и т.п.) в поле имени укажи \"@\".\n" +
+                "Двойной клик по записи справа - изменить; правая кнопка мыши - меню (проверить/изменить/удалить).");
 
             var column = Column(
                 Row(new Label { Text = "Зона:", AutoSize = true, Margin = new Padding(4, 8, 4, 2) }, cmbScopeZoneName, btnLoadZoneNames, btnLoadScopes),
@@ -784,13 +874,12 @@ namespace DnsToolWinForms
                 Row(new Label { Text = "Записи scope:", AutoSize = true, Margin = new Padding(4, 8, 4, 2) },
                     txtRecordScopeName, btnLoadRecords),
                 Row(new Label { Text = "Новая запись:", AutoSize = true, Margin = new Padding(4, 8, 4, 2) },
-                    cmbNewRecordType, txtRecordName, txtRecordValue, btnAddRecord),
-                Row(new Label { Text = "  ...только для SRV:", AutoSize = true, Margin = new Padding(4, 4, 4, 2), ForeColor = Color.DimGray },
-                    new Label { Text = "Priority", AutoSize = true, Margin = new Padding(4, 8, 0, 2) }, txtSrvPriority,
-                    new Label { Text = "Weight", AutoSize = true, Margin = new Padding(4, 8, 0, 2) }, txtSrvWeight,
-                    new Label { Text = "Port", AutoSize = true, Margin = new Padding(4, 8, 0, 2) }, txtSrvPort),
-                Row(new Label { Text = "", AutoSize = true, Margin = new Padding(4, 0, 4, 2), Width = 1 }, btnAddRecordFile),
-                Row(hint)
+                    cmbNewRecordType, txtRecordName, txtRecordValue, btnAddRecord, hint),
+                Row(HelpIcon.Create(_toolTip, "Эти три поля используются только для типов SRV и MX. Для остальных типов записей они игнорируются."),
+                    new Label { Text = "Priority/Preference", AutoSize = true, Margin = new Padding(4, 8, 0, 2) }, txtSrvPriority,
+                    new Label { Text = "Weight (SRV)", AutoSize = true, Margin = new Padding(4, 8, 0, 2) }, txtSrvWeight,
+                    new Label { Text = "Port (SRV)", AutoSize = true, Margin = new Padding(4, 8, 0, 2) }, txtSrvPort),
+                Row(new Label { Text = "", AutoSize = true, Margin = new Padding(4, 0, 4, 2), Width = 1 }, btnAddRecordFile, hintAddRecordFile)
             );
 
             return WrapTabTwoLists("Scopes и записи", column,
@@ -950,11 +1039,35 @@ namespace DnsToolWinForms
             await RefreshScopesAsync();
         }
 
+        /// <summary>
+        /// DNS-командлеты ждут ИМЯ ОТНОСИТЕЛЬНО ЗОНЫ (например "bla.bla" для записи внутри
+        /// "bla.bla.corp.local" в зоне "corp.local") и сами дописывают зону при создании.
+        /// Если пользователь ввёл имя целиком, с зоной на конце ("bla.bla.corp.local") -
+        /// зона приклеится ВТОРОЙ раз ("bla.bla.corp.local.corp.local"). Срезаем суффикс
+        /// зоны, если он есть, чтобы многоуровневые имена (bla.bla, а не просто bla)
+        /// создавались как в обычной оснастке - вложенной записью, а не дублем зоны.
+        /// </summary>
+        private static string NormalizeRecordName(string name, string zoneName)
+        {
+            if (string.IsNullOrEmpty(name) || name == "@" || string.IsNullOrEmpty(zoneName))
+                return name;
+
+            var suffix = "." + zoneName;
+            if (name.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
+                return name.Substring(0, name.Length - suffix.Length);
+
+            // Точное совпадение с именем зоны целиком - это и есть корень зоны
+            if (string.Equals(name, zoneName, StringComparison.OrdinalIgnoreCase))
+                return "@";
+
+            return name;
+        }
+
         private async Task AddRecordToScopeAsync()
         {
             var zoneName = Val(cmbScopeZoneName);
             var scopeName = Val(txtRecordScopeName);
-            var recordName = Val(txtRecordName);
+            var recordName = NormalizeRecordName(Val(txtRecordName), zoneName);
             var value = Val(txtRecordValue);
             var type = cmbNewRecordType.SelectedItem?.ToString() ?? "A";
 
@@ -1009,6 +1122,20 @@ namespace DnsToolWinForms
                     cmdlet = "Add-DnsServerResourceRecordPtr";
                     parameters["PtrDomainName"] = value;
                     break;
+                case "NS":
+                    // Add-DnsServerResourceRecordNS не существует (проверено отдельно по документации
+                    // Microsoft - в отличие от MX ниже, у NS выделенного командлета нет).
+                    cmdlet = "Add-DnsServerResourceRecord";
+                    parameters["NS"] = true;
+                    parameters["NameServer"] = value;
+                    break;
+                case "MX":
+                    // В отличие от NS/TXT/SRV, у MX ЕСТЬ выделенный командлет - проверено отдельно
+                    // по документации Microsoft (легко было по инерции отправить его в общий с NS/TXT/SRV).
+                    cmdlet = "Add-DnsServerResourceRecordMX";
+                    parameters["MailExchange"] = value;
+                    parameters["Preference"] = (ushort)ParseIntOrDefault(priorityText, 10);
+                    break;
                 case "TXT":
                     // Add-DnsServerResourceRecordTxt НЕ СУЩЕСТВУЕТ как отдельный командлет
                     // (проверено по официальной документации Microsoft) - только универсальный
@@ -1053,7 +1180,7 @@ namespace DnsToolWinForms
         {
             var zoneName = Val(cmbScopeZoneName);
             var scopeName = Val(txtRecordScopeName);
-            var recordName = Val(txtRecordName);
+            var recordName = NormalizeRecordName(Val(txtRecordName), zoneName);
             var value = Val(txtRecordValue);
             var type = cmbNewRecordType.SelectedItem?.ToString() ?? "A";
 
@@ -1095,6 +1222,13 @@ namespace DnsToolWinForms
                     break;
                 case "PTR":
                     line = $"{recordName}\tIN\tPTR\t{EnsureTrailingDot(value)}";
+                    break;
+                case "NS":
+                    line = $"{recordName}\tIN\tNS\t{EnsureTrailingDot(value)}";
+                    break;
+                case "MX":
+                    var preference = ParseIntOrDefault(Val(txtSrvPriority), 10);
+                    line = $"{recordName}\tIN\tMX\t{preference} {EnsureTrailingDot(value)}";
                     break;
                 case "TXT":
                     line = $"{recordName}\tIN\tTXT\t\"{value}\"";
@@ -1339,6 +1473,8 @@ namespace DnsToolWinForms
 
             var edited = RecordEditDialog.Show(oldType, oldName, oldValue, oldPriority, oldWeight, oldPort);
             if (edited == null) return; // нажали "Отмена"
+
+            edited.Name = NormalizeRecordName(edited.Name, zoneName);
 
             if (string.IsNullOrEmpty(edited.Name) || string.IsNullOrEmpty(edited.Value))
             {
