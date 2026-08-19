@@ -12,7 +12,7 @@ using System;
 using System.Reflection;
 
 [assembly: System.Reflection.AssemblyCompanyAttribute("Kuzanov.e")]
-[assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
+[assembly: System.Reflection.AssemblyConfigurationAttribute("Release")]
 [assembly: System.Reflection.AssemblyCopyrightAttribute("© Kuzanov.e, 2026")]
 [assembly: System.Reflection.AssemblyDescriptionAttribute("Инструмент управления DNS-сервером Windows: зоны, Zone Scopes, записи, подсети, п" +
     "олитики.")]

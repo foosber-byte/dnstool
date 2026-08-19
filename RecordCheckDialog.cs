@@ -42,43 +42,32 @@ namespace DnsToolWinForms
 
             var lblServer = new Label { Text = "Сервер:", Location = new Point(16, 52), AutoSize = true };
             var txtServer = new TextBox { Location = new Point(90, 48), Width = 320 };
-            var lblServerHint = new Label
-            {
-                Text = string.IsNullOrEmpty(appTargetServer)
-                    ? "для nslookup: пусто = локальный резолвер"
-                    : $"для nslookup: пусто = текущий целевой сервер ({appTargetServer})",
-                ForeColor = Color.DimGray,
-                Font = new Font("Segoe UI", 8.5F, FontStyle.Italic),
-                Location = new Point(418, 52),
-                AutoSize = true
-            };
-            var lblServerHint2 = new Label
-            {
-                Text = "для Ping: адрес источника (-S), если на этой машине несколько IP",
-                ForeColor = Color.DimGray,
-                Font = new Font("Segoe UI", 8.5F, FontStyle.Italic),
-                Location = new Point(90, 70),
-                AutoSize = true
-            };
+            var toolTip = new ToolTip();
+            var lblServerHint = HelpIcon.Create(toolTip,
+                (string.IsNullOrEmpty(appTargetServer)
+                    ? "Для nslookup: пусто = локальный резолвер."
+                    : $"Для nslookup: пусто = текущий целевой сервер ({appTargetServer}).") +
+                "\nДля Ping: адрес источника (-S), если на этой машине несколько IP.");
+            lblServerHint.Location = new Point(418, 50);
 
-            var btnCheck = new Button { Text = "Проверить (nslookup)", Location = new Point(16, 98), Size = new Size(150, 30) };
-            var btnPing = new Button { Text = "Ping", Location = new Point(174, 98), Size = new Size(70, 30) };
-            var chkPingT = new CheckBox { Text = "-t (непрерывно)", Location = new Point(250, 103), AutoSize = true };
-            var btnPingStop = new Button { Text = "Стоп", Location = new Point(400, 98), Size = new Size(70, 30), Enabled = false };
+            var btnCheck = new Button { Text = "Проверить (nslookup)", Location = new Point(16, 90), Size = new Size(150, 30) };
+            var btnPing = new Button { Text = "Ping", Location = new Point(174, 90), Size = new Size(70, 30) };
+            var chkPingT = new CheckBox { Text = "-t (непрерывно)", Location = new Point(250, 95), AutoSize = true };
+            var btnPingStop = new Button { Text = "Стоп", Location = new Point(400, 90), Size = new Size(70, 30), Enabled = false };
 
             var btnClose = new Button
             {
                 Text = "Закрыть",
                 DialogResult = DialogResult.Cancel,
-                Location = new Point(534, 98),
+                Location = new Point(534, 90),
                 Size = new Size(70, 30),
                 Anchor = AnchorStyles.Top | AnchorStyles.Right
             };
 
             var txtOutput = new TextBox
             {
-                Location = new Point(16, 140),
-                Size = new Size(588, 280),
+                Location = new Point(16, 132),
+                Size = new Size(588, 298),
                 Multiline = true,
                 ReadOnly = true,
                 ScrollBars = ScrollBars.Vertical,
@@ -208,7 +197,7 @@ namespace DnsToolWinForms
 
             dlg.Controls.AddRange(new Control[]
             {
-                lblName, txtName, lblServer, txtServer, lblServerHint, lblServerHint2,
+                lblName, txtName, lblServer, txtServer, lblServerHint,
                 btnCheck, btnPing, chkPingT, btnPingStop, btnClose, txtOutput
             });
             dlg.AcceptButton = btnCheck;
