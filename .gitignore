@@ -1,0 +1,10 @@
+bin/
+obj/
+.vs/
+*.user
+*.suo
+changes.log
+changes.log.bak_*
+settings.ini
+*.dns
+*.dns.bak_*
