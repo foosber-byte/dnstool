@@ -166,7 +166,7 @@ namespace DnsToolWinForms
 
             var lblFooterText = new Label
             {
-                Text = "Создано by Kuzanov.e, 2026",
+                Text = "Created by foosber, 2026",
                 AutoSize = true,
                 TextAlign = ContentAlignment.MiddleRight,
                 ForeColor = Color.Gray,

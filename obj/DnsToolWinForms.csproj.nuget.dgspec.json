@@ -1,23 +1,23 @@
 {
   "format": 1,
   "restore": {
-    "C:\\Users\\foosber\\dnsforms\\DnsToolWinForms.csproj": {}
+    "C:\\Users\\Kertee\\dnstool\\DnsToolWinForms.csproj": {}
   },
   "projects": {
-    "C:\\Users\\foosber\\dnsforms\\DnsToolWinForms.csproj": {
+    "C:\\Users\\Kertee\\dnstool\\DnsToolWinForms.csproj": {
       "version": "1.0.0",
       "restore": {
-        "projectUniqueName": "C:\\Users\\foosber\\dnsforms\\DnsToolWinForms.csproj",
+        "projectUniqueName": "C:\\Users\\Kertee\\dnstool\\DnsToolWinForms.csproj",
         "projectName": "DNS Server Tool",
-        "projectPath": "C:\\Users\\foosber\\dnsforms\\DnsToolWinForms.csproj",
-        "packagesPath": "C:\\Users\\foosber\\.nuget\\packages\\",
-        "outputPath": "C:\\Users\\foosber\\dnsforms\\obj\\",
+        "projectPath": "C:\\Users\\Kertee\\dnstool\\DnsToolWinForms.csproj",
+        "packagesPath": "C:\\Users\\Kertee\\.nuget\\packages\\",
+        "outputPath": "C:\\Users\\Kertee\\dnstool\\obj\\",
         "projectStyle": "PackageReference",
         "fallbackFolders": [
           "C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\NuGetPackages"
         ],
         "configFilePaths": [
-          "C:\\Users\\foosber\\AppData\\Roaming\\NuGet\\NuGet.Config",
+          "C:\\Users\\Kertee\\AppData\\Roaming\\NuGet\\NuGet.Config",
           "C:\\Program Files (x86)\\NuGet\\Config\\Microsoft.VisualStudio.FallbackLocation.config",
           "C:\\Program Files (x86)\\NuGet\\Config\\Microsoft.VisualStudio.Offline.config"
         ],
@@ -45,7 +45,7 @@
           "auditLevel": "low",
           "auditMode": "direct"
         },
-        "SdkAnalysisLevel": "10.0.300"
+        "SdkAnalysisLevel": "10.0.400"
       },
       "frameworks": {
         "net48": {
@@ -57,7 +57,7 @@
               "version": "[1.0.0, )"
             }
           },
-          "runtimeIdentifierGraphPath": "C:\\Program Files\\dotnet\\sdk\\10.0.303\\RuntimeIdentifierGraph.json"
+          "runtimeIdentifierGraphPath": "C:\\Program Files\\dotnet\\sdk\\10.0.400\\RuntimeIdentifierGraph.json"
         }
       },
       "runtimes": {
