@@ -11,3 +11,5 @@ C:\Users\foosber\dnsforms\obj\Debug\net48\DnsToolWinForms.sourcelink.json
 C:\Users\foosber\dnsforms\obj\Debug\net48\DnsToolW.65703AB7.Up2Date
 C:\Users\foosber\dnsforms\obj\Debug\net48\DNS Server Tool.exe
 C:\Users\foosber\dnsforms\obj\Debug\net48\DNS Server Tool.pdb
+C:\Users\Kertee\dnstool\obj\Debug\net48\DNS Server Tool.exe
+C:\Users\Kertee\dnstool\obj\Debug\net48\DNS Server Tool.pdb

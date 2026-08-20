@@ -73,8 +73,8 @@ namespace DnsToolWinForms
             }
 
             AddCenteredLabel($"Версия: v{AppVersion.Current}", new Font("Segoe UI", 9F), Color.DimGray, 22);
-            AddCenteredLabel("Автор: Kuzanov.e, 2026", new Font("Segoe UI", 9F), Color.DimGray, 22);
-            AddCenteredLabel("Лицензия: MIT - свободное использование, изменение, форк", new Font("Segoe UI", 8.5F), Color.Gray, 20);
+            AddCenteredLabel("Автор: foosber, 2026", new Font("Segoe UI", 9F), Color.DimGray, 22);
+            AddCenteredLabel("Лицензия: MIT", new Font("Segoe UI", 8.5F), Color.Gray, 20);
 
             var linkGitHub = new LinkLabel
             {
