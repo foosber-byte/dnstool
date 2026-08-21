@@ -26,3 +26,4 @@ C:\Users\Kertee\dnstool\obj\Release\net48\DnsToolWinForms.sourcelink.json
 C:\Users\Kertee\dnstool\obj\Release\net48\DnsToolW.65703AB7.Up2Date
 C:\Users\Kertee\dnstool\obj\Release\net48\DNS Server Tool.exe
 C:\Users\Kertee\dnstool\obj\Release\net48\DNS Server Tool.pdb
+C:\Users\foosber\dnsforms\bin\Release\net48\banner.png

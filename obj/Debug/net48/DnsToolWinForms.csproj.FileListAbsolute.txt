@@ -13,3 +13,4 @@ C:\Users\foosber\dnsforms\obj\Debug\net48\DNS Server Tool.exe
 C:\Users\foosber\dnsforms\obj\Debug\net48\DNS Server Tool.pdb
 C:\Users\Kertee\dnstool\obj\Debug\net48\DNS Server Tool.exe
 C:\Users\Kertee\dnstool\obj\Debug\net48\DNS Server Tool.pdb
+C:\Users\foosber\dnsforms\bin\Debug\net48\banner.png

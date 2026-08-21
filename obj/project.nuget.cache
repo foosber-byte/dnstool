@@ -1,10 +1,10 @@
 {
   "version": 2,
-  "dgSpecHash": "CjRBgM0LDdg=",
+  "dgSpecHash": "OnovZzhSNx4=",
   "success": true,
-  "projectFilePath": "C:\\Users\\Kertee\\dnstool\\DnsToolWinForms.csproj",
+  "projectFilePath": "C:\\Users\\foosber\\dnsforms\\DnsToolWinForms.csproj",
   "expectedPackageFiles": [
-    "C:\\Users\\Kertee\\.nuget\\packages\\microsoft.powershell.5.1.referenceassemblies\\1.0.0\\microsoft.powershell.5.1.referenceassemblies.1.0.0.nupkg.sha512"
+    "C:\\Users\\foosber\\.nuget\\packages\\microsoft.powershell.5.1.referenceassemblies\\1.0.0\\microsoft.powershell.5.1.referenceassemblies.1.0.0.nupkg.sha512"
   ],
   "logs": []
 }
