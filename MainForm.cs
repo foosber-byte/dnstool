@@ -45,11 +45,31 @@ namespace DnsToolWinForms
         private TextBox txtSrvPort;
         private ListBox lstRecords;
         private List<PSObject> _lastScopeRecords = new List<PSObject>(); // сырые данные с сервера, без сортировки/фильтра
-        private List<PSObject> _displayedRecords = new List<PSObject>(); // 1:1 с текущими строками lstRecords (после фильтра/сортировки) - по этому списку и индексу удаляем
+        private List<PSObject> _displayedRecords = new List<PSObject>(); // 1:1 с текущими строками lstRecords - null для строк-папок
+        private List<RecordTreeNode> _displayedFolders = new List<RecordTreeNode>(); // 1:1 с текущими строками lstRecords - null для строк-записей
         private TextBox txtRecordFilter;
         private ComboBox cmbRecordSort;
         private Button btnRecordSortDir;
         private bool _recordSortAscending = true;
+
+        // ---- дерево записей (группировка по точкам в имени, как в dnsmgmt.msc) ----
+        private TreeView treeRecordFolders;
+        private RecordTreeNode _recordTreeRoot;
+        private RecordTreeNode _currentFolderNode; // какая "папка" сейчас показана в правом списке
+        private Dictionary<RecordTreeNode, TreeNode> _folderToTreeNode = new Dictionary<RecordTreeNode, TreeNode>();
+
+        /// <summary>
+        /// Узел дерева записей - группировка по составным именам (admin.pro32connect -> папка
+        /// "pro32connect" содержит запись "admin"), как это делает стандартная оснастка dnsmgmt.msc.
+        /// Строится из уже загруженного плоского списка записей scope - без обращения к серверу.
+        /// </summary>
+        private class RecordTreeNode
+        {
+            public string Label;
+            public RecordTreeNode Parent;
+            public Dictionary<string, RecordTreeNode> Children = new Dictionary<string, RecordTreeNode>(StringComparer.OrdinalIgnoreCase);
+            public List<PSObject> RecordsHere = new List<PSObject>(); // записи, чьё полное имя заканчивается ИМЕННО на этом узле
+        }
 
         // ---- вкладка "Подсети" ----
         private ListBox lstSubnets;
@@ -166,7 +186,7 @@ namespace DnsToolWinForms
 
             var lblFooterText = new Label
             {
-                Text = "Created by foosber, 2026",
+                Text = "Создано by Kuzanov.e, 2026",
                 AutoSize = true,
                 TextAlign = ContentAlignment.MiddleRight,
                 ForeColor = Color.Gray,
@@ -724,7 +744,21 @@ namespace DnsToolWinForms
             lstScopes = new ListBox();
             lstRecords = new ListBox();
 
+            // Дерево "папок" записей (группировка по составным именам, как в dnsmgmt.msc) -
+            // строится из уже загруженных данных при каждом обновлении списка записей scope.
+            treeRecordFolders = new TreeView { HideSelection = false };
+            treeRecordFolders.AfterSelect += (s, e) =>
+            {
+                if (e.Node?.Tag is RecordTreeNode node)
+                {
+                    _currentFolderNode = node;
+                    RenderRecordsList();
+                }
+            };
+
             // Двойной клик по записи - сразу открыть редактирование (самый частый сценарий).
+            // Если это строка-папка - EditSelectedRecordAsync сам распознает это и зайдёт внутрь
+            // вместо попытки редактирования (см. NavigateToFolder внутри неё).
             lstRecords.DoubleClick += async (s, e) => await EditSelectedRecordAsync();
 
             // Правый клик - меню "Проверить" / "Изменить" / "Удалить" - все действия над
@@ -843,6 +877,29 @@ namespace DnsToolWinForms
             recordsWrapper.Controls.Add(lstRecords);
             recordsWrapper.Controls.Add(recordsFilterRow);
 
+            // Вложенный SplitContainer: дерево "папок" слева, список записей текущей папки справа.
+            // Тот же защитный приём с явным стартовым Size, что и у внешнего SplitContainer в
+            // WrapTabTwoLists - иначе при инициализации возможен InvalidOperationException
+            // из-за суммы Panel1MinSize+Panel2MinSize+SplitterWidth больше стартовой ширины.
+            var treeRecordsSplit = new SplitContainer
+            {
+                Size = new Size(700, 400),
+                Dock = DockStyle.Fill,
+                Orientation = Orientation.Vertical,
+                SplitterWidth = 6,
+                Panel1MinSize = 100,
+                Panel2MinSize = 150
+            };
+            treeRecordFolders.Dock = DockStyle.Fill;
+            treeRecordsSplit.Panel1.Controls.Add(treeRecordFolders);
+            treeRecordsSplit.Panel2.Controls.Add(recordsWrapper);
+            treeRecordsSplit.HandleCreated += (s, e) =>
+            {
+                try { treeRecordsSplit.SplitterDistance = AppSettings.GetInt("RecordsTreeSplitter", 220); }
+                catch { /* сохранённое значение больше не подходит по размеру - оставляем как есть */ }
+            };
+            treeRecordsSplit.SplitterMoved += (s, e) => AppSettings.SetInt("RecordsTreeSplitter", treeRecordsSplit.SplitterDistance);
+
             // Клик по scope в левом списке подставляет его имя в поле "scope для записей" -
             // не нужно перепечатывать руками, сразу жми "Показать записи в scope".
             // Список scopes теперь состоит из чистых имён (без "Field=" мусора), поэтому
@@ -866,6 +923,7 @@ namespace DnsToolWinForms
             var hint = HelpIcon.Create(_toolTip,
                 "Запись добавляется ИМЕННО в scope, указанный в поле выше (не в саму зону целиком).\n" +
                 "Для записи в корне зоны (SOA/NS/SPF и т.п.) в поле имени укажи \"@\".\n" +
+                "Слева - дерево записей, сгруппированных по составным именам (как в dnsmgmt.msc).\n" +
                 "Двойной клик по записи справа - изменить; правая кнопка мыши - меню (проверить/изменить/удалить).");
 
             var column = Column(
@@ -884,7 +942,7 @@ namespace DnsToolWinForms
 
             return WrapTabTwoLists("Scopes и записи", column,
                 "Scopes зоны", lstScopes,
-                "Записи выбранного scope", recordsWrapper,
+                "Записи выбранного scope (дерево слева, содержимое папки справа)", treeRecordsSplit,
                 "ScopesRecordsSplitter");
         }
 
@@ -1337,50 +1395,150 @@ namespace DnsToolWinForms
             AppendLog(log);
 
             _lastScopeRecords = results;
+            _recordTreeRoot = BuildRecordTree(results);
+            _currentFolderNode = _recordTreeRoot;
+            PopulateTreeView();
             RenderRecordsList();
         }
 
         /// <summary>
-        /// Перестраивает lstRecords из _lastScopeRecords с учётом текущего фильтра/сортировки,
-        /// без обращения к серверу. Параллельно обновляет _displayedRecords - по нему (не по
-        /// _lastScopeRecords!) идёт удаление по индексу, чтобы сортировка/фильтр не путали,
-        /// какая строка какой записи на самом деле соответствует.
+        /// Группирует плоский список записей в дерево по составным именам - так же, как это
+        /// делает dnsmgmt.msc: "admin.pro32connect" -> папка "pro32connect" содержит запись "admin".
+        /// Имя разбивается по точкам и ЧИТАЕТСЯ СПРАВА НАЛЕВО (правый сегмент - самый внешний
+        /// уровень, ближе к корню зоны) - "_ldap._tcp.dc._msdcs" даёт путь _msdcs > dc > _tcp > _ldap.
+        /// Работает на уже загруженных данных, без обращения к серверу.
+        /// </summary>
+        private static RecordTreeNode BuildRecordTree(List<PSObject> records)
+        {
+            var root = new RecordTreeNode { Label = "" };
+            foreach (var rec in records)
+            {
+                var name = rec.Properties["HostName"]?.Value?.ToString() ?? "";
+                if (string.IsNullOrEmpty(name) || name == "@")
+                {
+                    root.RecordsHere.Add(rec);
+                    continue;
+                }
+
+                var segments = name.Split('.');
+                Array.Reverse(segments);
+
+                var node = root;
+                foreach (var seg in segments)
+                {
+                    if (!node.Children.TryGetValue(seg, out var child))
+                    {
+                        child = new RecordTreeNode { Label = seg, Parent = node };
+                        node.Children[seg] = child;
+                    }
+                    node = child;
+                }
+                node.RecordsHere.Add(rec);
+            }
+            return root;
+        }
+
+        /// <summary>Считает записи во всём поддереве узла (для метки "N записей" у папки в списке).</summary>
+        private static int CountRecordsRecursive(RecordTreeNode node)
+        {
+            var count = node.RecordsHere.Count;
+            foreach (var child in node.Children.Values)
+                count += CountRecordsRecursive(child);
+            return count;
+        }
+
+        /// <summary>Строит TreeView заново из _recordTreeRoot и выделяет корень.</summary>
+        private void PopulateTreeView()
+        {
+            treeRecordFolders.Nodes.Clear();
+            _folderToTreeNode.Clear();
+            if (_recordTreeRoot == null) return;
+
+            var rootTn = new TreeNode("(корень scope)") { Tag = _recordTreeRoot };
+            _folderToTreeNode[_recordTreeRoot] = rootTn;
+            AddChildTreeNodes(rootTn, _recordTreeRoot);
+            treeRecordFolders.Nodes.Add(rootTn);
+            rootTn.Expand(); // сам корень разворачиваем - видно первый уровень папок сразу; глубже - по требованию
+            treeRecordFolders.SelectedNode = rootTn;
+        }
+
+        private void AddChildTreeNodes(TreeNode parentTn, RecordTreeNode node)
+        {
+            foreach (var child in node.Children.Values.OrderBy(c => c.Label, StringComparer.OrdinalIgnoreCase))
+            {
+                var childTn = new TreeNode(child.Label) { Tag = child };
+                parentTn.Nodes.Add(childTn);
+                _folderToTreeNode[child] = childTn;
+                AddChildTreeNodes(childTn, child);
+            }
+        }
+
+        /// <summary>Переключает текущую "папку" (используется и кликом по дереву, и двойным кликом по строке-папке справа).</summary>
+        private void NavigateToFolder(RecordTreeNode node)
+        {
+            if (node == null) return;
+            _currentFolderNode = node;
+            if (_folderToTreeNode.TryGetValue(node, out var tn))
+                treeRecordFolders.SelectedNode = tn; // синхронизируем дерево, если навигация пришла не из него
+            RenderRecordsList();
+        }
+
+        /// <summary>
+        /// Перестраивает lstRecords из ТЕКУЩЕЙ ПАПКИ (_currentFolderNode) - и её подпапки, и её
+        /// собственные записи - с учётом фильтра/сортировки, без обращения к серверу. Параллельно
+        /// обновляет _displayedRecords/_displayedFolders - по ним (не по _lastScopeRecords!) идёт
+        /// удаление/редактирование по индексу и различение "это запись" / "это папка".
         /// </summary>
         private void RenderRecordsList()
         {
+            lstRecords.Items.Clear();
+            _displayedRecords.Clear();
+            _displayedFolders.Clear();
+
+            if (_currentFolderNode == null) return;
+
             var filter = (txtRecordFilter.Text ?? "").Trim();
 
-            var rows = _lastScopeRecords.Select(rec =>
+            var rows = new List<(string display, string name, string type, string value, bool isFolder, RecordTreeNode folder, PSObject record)>();
+
+            foreach (var child in _currentFolderNode.Children.Values)
+            {
+                var count = CountRecordsRecursive(child);
+                var display = $"📁 {child.Label,-26} ПАПКА  {count} запис.";
+                rows.Add((display, child.Label, "ПАПКА", count.ToString(), true, child, null));
+            }
+
+            foreach (var rec in _currentFolderNode.RecordsHere)
             {
                 var name = rec.Properties["HostName"]?.Value?.ToString() ?? "";
                 var type = rec.Properties["RecordType"]?.Value?.ToString() ?? "";
                 var data = DnsHelper.DescribeRecordData(rec.Properties["RecordData"]?.Value, type);
-                return (raw: rec, name, type, data, display: $"{name,-28} {type,-6} {data}");
-            });
+                var display = $"{name,-28} {type,-6} {data}";
+                rows.Add((display, name, type, data, false, null, rec));
+            }
 
+            IEnumerable<(string display, string name, string type, string value, bool isFolder, RecordTreeNode folder, PSObject record)> filtered = rows;
             if (!string.IsNullOrEmpty(filter))
-                rows = rows.Where(r => r.name.IndexOf(filter, StringComparison.OrdinalIgnoreCase) >= 0 ||
-                                        r.type.IndexOf(filter, StringComparison.OrdinalIgnoreCase) >= 0 ||
-                                        r.data.IndexOf(filter, StringComparison.OrdinalIgnoreCase) >= 0);
+                filtered = rows.Where(r => r.name.IndexOf(filter, StringComparison.OrdinalIgnoreCase) >= 0 ||
+                                            r.type.IndexOf(filter, StringComparison.OrdinalIgnoreCase) >= 0 ||
+                                            r.value.IndexOf(filter, StringComparison.OrdinalIgnoreCase) >= 0);
 
-            Func<(PSObject raw, string name, string type, string data, string display), string> keySelector = cmbRecordSort.SelectedIndex switch
+            Func<(string display, string name, string type, string value, bool isFolder, RecordTreeNode folder, PSObject record), string> keySelector = cmbRecordSort.SelectedIndex switch
             {
                 1 => r => r.type,
-                2 => r => r.data,
+                2 => r => r.value,
                 _ => r => r.name
             };
 
-            rows = _recordSortAscending
-                ? rows.OrderBy(keySelector, StringComparer.OrdinalIgnoreCase)
-                : rows.OrderByDescending(keySelector, StringComparer.OrdinalIgnoreCase);
+            filtered = _recordSortAscending
+                ? filtered.OrderBy(keySelector, StringComparer.OrdinalIgnoreCase)
+                : filtered.OrderByDescending(keySelector, StringComparer.OrdinalIgnoreCase);
 
-            var rowsList = rows.ToList();
-            lstRecords.Items.Clear();
-            _displayedRecords.Clear();
-            foreach (var r in rowsList)
+            foreach (var r in filtered.ToList())
             {
                 lstRecords.Items.Add(r.display);
-                _displayedRecords.Add(r.raw);
+                _displayedRecords.Add(r.record);
+                _displayedFolders.Add(r.folder);
             }
         }
 
@@ -1398,6 +1556,11 @@ namespace DnsToolWinForms
             if (index < 0 || index >= _displayedRecords.Count)
             {
                 AppendLog("Выбери запись в правом списке (и сначала нажми 'Показать записи в scope', если список пуст).");
+                return;
+            }
+            if (_displayedRecords[index] == null)
+            {
+                AppendLog("Это папка (группировка по имени), а не запись - удалить её напрямую нельзя, зайди внутрь и работай с записями.");
                 return;
             }
 
@@ -1450,6 +1613,11 @@ namespace DnsToolWinForms
             if (index < 0 || index >= _displayedRecords.Count)
             {
                 AppendLog("Выбери запись в списке для редактирования.");
+                return;
+            }
+            if (_displayedRecords[index] == null)
+            {
+                NavigateToFolder(_displayedFolders[index]); // это папка - заходим внутрь вместо редактирования
                 return;
             }
 
@@ -1608,6 +1776,12 @@ namespace DnsToolWinForms
         private void CheckSelectedRecord()
         {
             var index = lstRecords.SelectedIndex;
+            if (index >= 0 && index < _displayedRecords.Count && _displayedRecords[index] == null)
+            {
+                AppendLog("Это папка (группировка по имени), а не запись - для проверки зайди внутрь и выбери саму запись.");
+                return;
+            }
+
             var hostName = (index >= 0 && index < _displayedRecords.Count)
                 ? _displayedRecords[index].Properties["HostName"]?.Value?.ToString() ?? ""
                 : "";

@@ -18,14 +18,14 @@
     <!-- Метаданные сборки - видны в свойствах exe (правой кнопкой -> Свойства -> Подробности).
          Явно заданы, чтобы не зависеть от того, что Visual Studio подставит по умолчанию
          (логин пользователя Windows и т.п.) на машине, где идёт сборка. -->
-    <Company>foosber</Company>
+    <Company>Kuzanov.e</Company>
     <Product>DNS Server Tool</Product>
-    <Authors>foosber</Authors>
-    <Copyright>© foosber, 2026</Copyright>
+    <Authors>Kuzanov.e</Authors>
+    <Copyright>© Kuzanov.e, 2026</Copyright>
     <!-- Версия-счётчик: v2.0 - крупная веха (аутентификация, NS/MX, файловый режим для
          Secondary-зон, фикс многоуровневых имён записей). Дальше мелкие правки идут как
          v2.0.<N> (например v2.0.1), а следующая крупная веха - v2.1 или v3.0. -->
-    <AssemblyTitle>DNS Server Tool v.2.0.4</AssemblyTitle>
+    <AssemblyTitle>DNS Server Tool v2.1.0</AssemblyTitle>
     <Description>Инструмент управления DNS-сервером Windows: зоны, Zone Scopes, записи, подсети, политики.</Description>
 
     <!-- Иконка exe (проводник, панель задач, свойства файла). Обязательно положи файл icon.ico

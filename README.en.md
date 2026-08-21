@@ -9,7 +9,7 @@ inside a scope (A/AAAA/CNAME/PTR/TXT/SRV), client subnets, and Query Resolution 
 It works through the built-in `DnsServer` PowerShell module — the app must run **on the DNS
 server itself**, as administrator.
 
-Author: foosber, 2026.
+Author: Kuzanov.e, 2026.
 
 ## Requirements
 
