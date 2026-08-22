@@ -25,11 +25,11 @@ namespace DnsToolWinForms
     public static class RecordEditDialog
     {
         public static RecordEditResult Show(string currentType, string currentName, string currentValue,
-            string currentPriority, string currentWeight, string currentPort)
+            string currentPriority, string currentWeight, string currentPort, bool isNew = false)
         {
             using var dlg = new Form
             {
-                Text = "Изменить запись",
+                Text = isNew ? "Добавить запись" : "Изменить запись",
                 FormBorderStyle = FormBorderStyle.FixedDialog,
                 StartPosition = FormStartPosition.CenterParent,
                 MaximizeBox = false,
@@ -46,9 +46,10 @@ namespace DnsToolWinForms
             var cmbType = new ComboBox { Location = new Point(140, 20), Width = 120, DropDownStyle = ComboBoxStyle.DropDownList };
             cmbType.Items.AddRange(new object[] { "A", "AAAA", "CNAME", "PTR", "NS", "MX", "TXT", "SRV" });
             cmbType.SelectedItem = cmbType.Items.Contains(currentType) ? currentType : "A";
-            var hintNote = HelpIcon.Create(toolTip,
-                "Запись будет пересоздана с новыми значениями: сначала добавляется новая, " +
-                "и только при успехе удаляется старая - исходная запись не теряется при сбое.");
+            var hintNote = HelpIcon.Create(toolTip, isNew
+                ? "Запись добавляется в scope/папку, которая сейчас выбрана в дереве слева."
+                : "Запись будет пересоздана с новыми значениями: сначала добавляется новая, " +
+                  "и только при успехе удаляется старая - исходная запись не теряется при сбое.");
             hintNote.Location = new Point(268, 22);
 
             var lblName = new Label { Text = "Имя:", Location = new Point(16, 62), AutoSize = true };
@@ -71,8 +72,34 @@ namespace DnsToolWinForms
                 "Weight и Port игнорируются. Для остальных типов записей эти поля не используются.");
             hintSrv.Location = new Point(16, 160);
 
+            // Поля Priority/Weight/Port нужны только для SRV и MX - показываем их только тогда,
+            // когда выбран подходящий тип, а не всегда (для A/AAAA/CNAME и т.п. они бы просто
+            // занимали место, ничего не делая).
+            void UpdateFieldVisibility()
+            {
+                var type = cmbType.Text;
+                var isSrv = type == "SRV";
+                var isMx = type == "MX";
+                var needsAny = isSrv || isMx;
+
+                lblPriority.Visible = needsAny;
+                txtPriority.Visible = needsAny;
+                lblPriority.Text = isMx ? "Preference:" : "Priority:";
+
+                lblWeight.Visible = isSrv;
+                txtWeight.Visible = isSrv;
+
+                lblPort.Visible = isSrv;
+                txtPort.Visible = isSrv;
+
+                hintSrv.Visible = needsAny;
+            }
+
+            cmbType.SelectedIndexChanged += (s, e) => UpdateFieldVisibility();
+            UpdateFieldVisibility(); // начальное состояние - сразу после создания всех полей выше
+
             var btnCancel = new Button { Text = "Отмена", DialogResult = DialogResult.Cancel, Location = new Point(240, 200), Size = new Size(90, 32) };
-            var btnSave = new Button { Text = "Сохранить", DialogResult = DialogResult.OK, Location = new Point(336, 200), Size = new Size(90, 32) };
+            var btnSave = new Button { Text = isNew ? "Добавить" : "Сохранить", DialogResult = DialogResult.OK, Location = new Point(336, 200), Size = new Size(90, 32) };
 
             dlg.Controls.AddRange(new Control[]
             {

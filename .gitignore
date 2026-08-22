@@ -8,3 +8,4 @@ changes.log.bak_*
 settings.ini
 *.dns
 *.dns.bak_*
+SECURITY.md
