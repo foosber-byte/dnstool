@@ -6,7 +6,7 @@ A WinForms app for managing a Windows DNS Server — covers what `dnsmgmt.msc` d
 records inside a Zone Scope shown as a tree, client subnets, Query Resolution Policies,
 remote management of another server with its own authentication, self-updating from GitHub.
 
-Works through the built-in `DnsServer` PowerShell module. Author: foosber, 2026. v2.3.1.
+Works through the built-in `DnsServer` PowerShell module. Author: foosber, 2026. v2.4.0.
 
 ## Requirements
 
@@ -36,8 +36,9 @@ session, doesn't nag on repeated failures.
   compactness there.
 - **"?" tooltips** — a round pastel icon with text in a tooltip (`HelpIcon.cs`) instead of
   permanent gray text.
-- **Banner** — a separate block above the connection panel (a readable size, not squeezed
-  into its height), clicking opens "About" (same as the footer icon).
+- **Banner** — on the right side of the very top panel, spanning its full height (not a
+  separate block above, and not squeezed to match the controls' height), clicking opens
+  "About" (same as the footer icon).
 - Double-click a record to edit; right-click for check/edit/delete (plus "create folder" on
   the record tree).
 - Collapsible output block without losing accumulated text.
@@ -71,6 +72,20 @@ a folder.
 **File-based mode** (notepad icon) — a workaround for Secondary zones where normal adding
 fails with `WIN32 9611`: edits the scope's `.dns` file directly, always locally, with a
 backup and `dnscmd /ZoneReload`. Shows an explicit warning every time.
+
+**Export** to `.txt` — the first line records the date and the **server name** the export
+came from (`DnsHelper.ComputerName` if a target server is set, otherwise the local machine's
+name), so the file makes sense even without extra context.
+
+**Import** from such a file (the up-arrow icon): folder rows (`📁 name FOLDER N records.`)
+are recognized and not imported as records — instead, the app offers to create the matching
+subdomain via a wildcard record (with an IP for each, if wanted). There's an "Exclude @
+records" checkbox. Import targets the currently selected folder/scope (same as adding a
+single record manually). SRV/MX values are parsed back from the export's composite text
+(`target:port (priority=..., weight=...)` / `exchange (preference=...)`); if a record from
+the file already exists in the scope (by name+type), it asks whether to overwrite or skip,
+with a bulk "all" option — after which further conflicts are resolved automatically without
+asking again.
 
 **Cmdlets**: A/AAAA/CNAME/PTR/MX use type-specific cmdlets (`Add-DnsServerResourceRecordA`
 etc.). NS/TXT/SRV — only the generic `Add-DnsServerResourceRecord -NS/-Txt/-Srv` (no

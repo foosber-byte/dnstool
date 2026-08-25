@@ -429,13 +429,21 @@ namespace DnsToolWinForms
                 return $"{target}:{port} (priority={priority}, weight={weight})";
             }
 
+            // MX - аналогично, Preference раньше нигде не показывался (ни в списке, ни в
+            // экспорте) - без него экспорт/импорт MX-записей терял приоритет молча.
+            if (typeUpper == "MX")
+            {
+                var exchange = psObj.Properties["MailExchange"]?.Value?.ToString() ?? "";
+                var preference = psObj.Properties["Preference"]?.Value?.ToString() ?? "";
+                return $"{exchange} (preference={preference})";
+            }
+
             string[] candidateProps = typeUpper switch
             {
                 "A" => new[] { "IPv4Address" },
                 "AAAA" => new[] { "IPv6Address" },
                 "CNAME" => new[] { "HostNameAlias" },
                 "NS" => new[] { "NameServer" },
-                "MX" => new[] { "MailExchange" },
                 "TXT" => new[] { "DescriptiveText" },
                 "PTR" => new[] { "PtrDomainName" },
                 "SOA" => new[] { "PrimaryServer" },

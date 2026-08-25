@@ -152,7 +152,6 @@ namespace DnsToolWinForms
             };
 
             var targetServerPanel = BuildTargetServerPanel();
-            var brandHeaderPanel = BuildBrandHeaderPanel();
 
             var outputPanel = BuildOutputPanel();
 
@@ -211,7 +210,6 @@ namespace DnsToolWinForms
             Controls.Add(outputPanel);
             Controls.Add(footer);
             Controls.Add(targetServerPanel);
-            Controls.Add(brandHeaderPanel);
         }
 
         /// <summary>
@@ -219,32 +217,32 @@ namespace DnsToolWinForms
         /// (как было раньше). Если указать имя сервера - ВСЕ операции на всех вкладках начинают
         /// выполняться на нём через -ComputerName (WinRM), без переезда приложения на другой сервер.
         /// </summary>
-        /// <summary>
-        /// Отдельный блок сверху окна - специально под баннер-логотип в читаемом размере.
-        /// Раньше баннер пытались втиснуть в панель подключения (те же 32px по высоте, что и
-        /// сама панель) - при таком сжатии текст на баннере ("DNS Server Tool" и тэглайн)
-        /// превращался в нечитаемое пятно. Теперь у баннера своя полоса, панель подключения
-        /// ниже осталась той же высоты, что и была.
-        /// </summary>
-        private Control BuildBrandHeaderPanel()
+        private Control BuildTargetServerPanel()
         {
-            const int height = 56;
-            var panel = new Panel { Dock = DockStyle.Top, Height = height, BackColor = Color.FromArgb(245, 247, 249) };
+            // Высота увеличена (была 40) - специально под баннер справа, чтобы он занимал
+            // читаемый размер на всю высоту этого блока, а не был ужат до пары строчек.
+            const int panelHeight = 56;
+            var panel = new Panel { Dock = DockStyle.Top, Height = panelHeight, BackColor = Color.FromArgb(245, 247, 249) };
 
+            // Баннер - на всю высоту панели (без отступов сверху/снизу от panel.Padding, у самой
+            // panel его нет специально - иначе баннер ужался бы теми же отступами, что и строка
+            // элементов слева). Добавляем ПЕРВЫМ - Dock=Right должен зарезервировать место
+            // раньше, чем rowContainer (Dock=Fill) займёт всё оставшееся.
             var bannerPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "banner.png");
             if (File.Exists(bannerPath))
             {
                 try
                 {
                     using var original = Image.FromFile(bannerPath);
-                    var displayHeight = height - 8; // небольшой отступ сверху/снизу, не впритык к краям
+                    var displayHeight = panelHeight - 8; // лёгкий отступ, не совсем впритык к краям
                     var displayWidth = (int)(original.Width * (displayHeight / (float)original.Height));
                     var bannerPic = new PictureBox
                     {
                         Image = new Bitmap(original, new Size(displayWidth, displayHeight)),
                         SizeMode = PictureBoxSizeMode.Zoom,
-                        Size = new Size(displayWidth, displayHeight),
-                        Location = new Point(12, (height - displayHeight) / 2),
+                        Dock = DockStyle.Right,
+                        Width = displayWidth + 16, // запас по горизонтали, чтобы баннер не липнул к правому краю окна
+                        Padding = new Padding(0, 4, 8, 4),
                         Cursor = Cursors.Hand
                     };
                     bannerPic.Click += (s, e) => AboutDialog.Show();
@@ -254,14 +252,13 @@ namespace DnsToolWinForms
                 catch { /* повреждённый файл баннера - не критично, просто пропускаем */ }
             }
 
-            return panel;
-        }
-
-        private Control BuildTargetServerPanel()
-        {
-            var panel = new Panel { Dock = DockStyle.Top, Height = 40, Padding = new Padding(6, 4, 6, 4), BackColor = Color.FromArgb(245, 247, 249) };
-
+            // Строка с элементами управления сервером - в оставшемся месте слева, вертикально
+            // центрируется за счёт padding именно ЭТОГО вложенного контейнера (не общего
+            // panel.Padding - тот, если бы был, ужал бы по высоте и баннер справа тоже).
+            var rowContainer = new Panel { Dock = DockStyle.Fill, Padding = new Padding(6, 14, 6, 14) };
             var row = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.LeftToRight, WrapContents = false };
+            rowContainer.Controls.Add(row);
+            panel.Controls.Add(rowContainer);
 
             row.Controls.Add(new Label
             {
@@ -314,7 +311,6 @@ namespace DnsToolWinForms
             row.Controls.Add(btnTestConnection);
             row.Controls.Add(hint);
 
-            panel.Controls.Add(row);
             return panel;
         }
 
@@ -985,7 +981,11 @@ namespace DnsToolWinForms
             };
 
             var btnExportRecords = IconFactory.CreateButton(IconFactory.Export(), "Экспорт в файл...", _toolTip,
-                (s, e) => ExportListToFile(lstRecords.Items.Cast<string>(), $"records_{Val(txtRecordScopeName)}_{DateTime.Now:yyyyMMdd_HHmmss}.txt"));
+                (s, e) => ExportListToFile(lstRecords.Items.Cast<string>(), $"records_{Val(txtRecordScopeName)}_{DateTime.Now:yyyyMMdd_HHmmss}.txt",
+                    $"Экспортировано {DateTime.Now:yyyy-MM-dd HH:mm:ss} с сервера: {CurrentServerLabel()} | Зона: {Val(cmbScopeZoneName)} | Scope: {Val(txtRecordScopeName)}"));
+
+            var btnImportRecords = IconFactory.CreateButton(IconFactory.Import(), "Импорт записей из файла...", _toolTip,
+                async (s, e) => await ImportRecordsAsync());
 
             var recordsFilterRow = new FlowLayoutPanel
             {
@@ -1001,6 +1001,7 @@ namespace DnsToolWinForms
             recordsFilterRow.Controls.Add(cmbRecordSort);
             recordsFilterRow.Controls.Add(btnRecordSortDir);
             recordsFilterRow.Controls.Add(btnExportRecords);
+            recordsFilterRow.Controls.Add(btnImportRecords);
 
             lstRecords.Dock = DockStyle.Fill;
             lstRecords.Font = new Font("Consolas", 9F);
@@ -1348,6 +1349,233 @@ namespace DnsToolWinForms
             FileLogger.LogChange("RECORD ADD", zoneName,
                 $"Scope={scopeName} A {wildcardName} -> {ip} (создание папки '{folderName}')", WasSuccess(log), log);
 
+            await RefreshRecordsAsync();
+        }
+
+        /// <summary>
+        /// Импорт записей из файла, ранее сохранённого через "Экспорт в файл...". Строки-папки
+        /// (вида "📁 имя  ПАПКА  N запис.") распознаются и НЕ импортируются как записи - вместо
+        /// этого пользователю предлагается создать соответствующий субдомен через wildcard
+        /// (см. CreateSubfolderAsync выше - та же идея, здесь просто автоматизирован массовый
+        /// разбор файла). Строки-заголовки экспорта (начинаются с "#") пропускаются как метаданные.
+        /// Для SRV/MX значение в файле составное (см. DnsHelper.DescribeRecordData) - разбирается
+        /// обратно регуляркой; если формат не совпал (например, файл от старой версии без
+        /// preference у MX) - запись всё равно импортируется с разумными значениями по умолчанию,
+        /// кроме SRV, где без порта/приоритета/веса создать запись нельзя - такие пропускаются
+        /// с явным сообщением, добавить придётся вручную.
+        /// </summary>
+        private async Task ImportRecordsAsync()
+        {
+            var zoneName = Val(cmbScopeZoneName);
+            var scopeName = Val(txtRecordScopeName);
+            if (string.IsNullOrEmpty(zoneName) || string.IsNullOrEmpty(scopeName))
+            {
+                AppendLog("Сначала выбери зону и scope (в дереве слева).");
+                return;
+            }
+
+            using var ofd = new OpenFileDialog
+            {
+                Filter = "Текстовый файл (*.txt)|*.txt|Все файлы (*.*)|*.*",
+                Title = "Выбери файл с выгрузкой записей"
+            };
+            if (ofd.ShowDialog() != DialogResult.OK) return;
+
+            string[] rawLines;
+            try { rawLines = File.ReadAllLines(ofd.FileName); }
+            catch (Exception ex) { AppendLog($"ОШИБКА: не удалось прочитать файл - {ex.Message}"); return; }
+
+            var detectedFolders = new List<string>();
+            var detectedRecords = new List<(string Name, string Type, string Value)>();
+
+            foreach (var raw in rawLines)
+            {
+                var line = raw.TrimEnd();
+                if (string.IsNullOrWhiteSpace(line)) continue;
+                if (line.TrimStart().StartsWith("#")) continue; // строка-заголовок экспорта, не запись
+
+                if (line.Contains("📁"))
+                {
+                    // "📁 pro32connect              ПАПКА  4 запис." - вырезаем имя между
+                    // значком и словом "ПАПКА", без привязки к точным позициям колонок.
+                    var afterEmoji = line.Substring(line.IndexOf('📁') + 1).Trim();
+                    var idx = afterEmoji.IndexOf("ПАПКА", StringComparison.Ordinal);
+                    var folderName = idx > 0 ? afterEmoji.Substring(0, idx).Trim() : afterEmoji.Trim();
+                    if (!string.IsNullOrEmpty(folderName) && !detectedFolders.Contains(folderName))
+                        detectedFolders.Add(folderName);
+                    continue; // папка - не настоящая запись, при импорте самих записей игнорируем
+                }
+
+                // Формат строки записи - "{name,-28} {type,-6} {value}" (см. RenderRecordsList).
+                // Парсим по разделителю "2+ пробела подряд", а не по точным позициям колонок -
+                // устойчивее, если формат чуть поменяется в будущей версии.
+                var parts = System.Text.RegularExpressions.Regex.Split(line.Trim(), @"\s{2,}");
+                if (parts.Length < 3) continue; // не похоже на строку записи - пропускаем молча
+
+                var name = parts[0].Trim();
+                var type = parts[1].Trim();
+                var value = string.Join(" ", parts.Skip(2)).Trim();
+                detectedRecords.Add((name, type, value));
+            }
+
+            if (detectedRecords.Count == 0 && detectedFolders.Count == 0)
+            {
+                AppendLog("В файле не найдено ни записей, ни папок - нечего импортировать.");
+                return;
+            }
+
+            var currentPathSuffix = GetFolderPathSuffix(_currentFolderNode);
+            var targetHint = string.IsNullOrEmpty(currentPathSuffix)
+                ? $"{zoneName} / {scopeName} (корень scope)"
+                : $"{zoneName} / {scopeName} / {currentPathSuffix}";
+
+            var options = ImportRecordsDialog.Show(detectedFolders, detectedRecords.Count, targetHint);
+            if (options == null) return; // отмена
+
+            AppendLog($"Импорт: начинаю ({detectedRecords.Count} записей в файле, папок к созданию: {options.Folders.Count(f => f.Create)})...");
+
+            // Сначала создаём выбранные папки (wildcard-записи) - структура раньше содержимого,
+            // хотя для самого DNS Server порядок не принципиален.
+            foreach (var folder in options.Folders.Where(f => f.Create))
+            {
+                if (string.IsNullOrEmpty(folder.WildcardIp))
+                {
+                    AppendLog($"Пропускаю создание папки '{folder.Name}' - не указан IP для wildcard-записи.");
+                    continue;
+                }
+
+                var wildcardName = string.IsNullOrEmpty(currentPathSuffix) ? $"*.{folder.Name}" : $"*.{folder.Name}.{currentPathSuffix}";
+                var (folderCmdlet, folderParams) = BuildAddRecordCommand(zoneName, scopeName, "A", wildcardName, folder.WildcardIp, "", "", "");
+                AppendLog($"Создаю папку '{folder.Name}' - wildcard-запись '{wildcardName}' -> {folder.WildcardIp}...");
+                var (_, folderLog) = await Task.Run(() => DnsHelper.Invoke(folderCmdlet, folderParams));
+                AppendLog(folderLog);
+                FileLogger.LogChange("RECORD ADD", zoneName,
+                    $"Scope={scopeName} A {wildcardName} -> {folder.WildcardIp} (импорт, создание папки '{folder.Name}')", WasSuccess(folderLog), folderLog);
+            }
+
+            // Актуальный список записей ЭТОГО scope - нужен для проверки конфликтов (имя+тип)
+            // и для получения "сырого" объекта существующей записи при перезаписи.
+            var existingParams = new Dictionary<string, object> { ["ZoneName"] = zoneName, ["ZoneScope"] = scopeName };
+            var (existingResults, existingLog) = await Task.Run(() => DnsHelper.Invoke("Get-DnsServerResourceRecord", existingParams));
+            if (!WasSuccess(existingLog))
+            {
+                AppendLog("ОШИБКА: не удалось получить текущие записи scope для проверки конфликтов - импорт остановлен.");
+                AppendLog(existingLog);
+                return;
+            }
+
+            var bulkModeActive = false;
+            var bulkChoice = ImportConflictChoice.Skip;
+            int added = 0, overwritten = 0, skipped = 0, failed = 0;
+
+            foreach (var rec in detectedRecords)
+            {
+                if (options.ExcludeApex && (rec.Name == "@" || string.IsNullOrEmpty(rec.Name)))
+                {
+                    skipped++;
+                    continue;
+                }
+
+                var existingMatch = existingResults.FirstOrDefault(r =>
+                    string.Equals(r.Properties["HostName"]?.Value?.ToString(), rec.Name, StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(r.Properties["RecordType"]?.Value?.ToString(), rec.Type, StringComparison.OrdinalIgnoreCase));
+                var isConflict = existingMatch != null;
+
+                if (isConflict)
+                {
+                    ImportConflictChoice choice;
+                    if (bulkModeActive)
+                    {
+                        choice = bulkChoice;
+                    }
+                    else
+                    {
+                        choice = ImportConflictDialog.Show(rec.Name, rec.Type);
+                        if (choice == ImportConflictChoice.OverwriteAll || choice == ImportConflictChoice.SkipAll)
+                        {
+                            bulkModeActive = true;
+                            bulkChoice = choice == ImportConflictChoice.OverwriteAll ? ImportConflictChoice.Overwrite : ImportConflictChoice.Skip;
+                            choice = bulkChoice;
+                        }
+                    }
+
+                    if (choice == ImportConflictChoice.Skip)
+                    {
+                        skipped++;
+                        continue;
+                    }
+
+                    // Перезапись - сначала удаляем старую запись целиком через -InputObject
+                    // (тот же паттерн, что и в RemoveRecordAsync), потом добавляем новую ниже.
+                    var delParams = new Dictionary<string, object>
+                    {
+                        ["ZoneName"] = zoneName,
+                        ["ZoneScope"] = scopeName,
+                        ["InputObject"] = existingMatch,
+                        ["Force"] = true
+                    };
+                    var (_, delLog) = await Task.Run(() => DnsHelper.Invoke("Remove-DnsServerResourceRecord", delParams));
+                    if (!WasSuccess(delLog))
+                    {
+                        AppendLog($"ОШИБКА при удалении старой записи '{rec.Name}' перед перезаписью: {delLog}");
+                        failed++;
+                        continue;
+                    }
+                }
+
+                // SRV/MX - значение в файле составное (см. DescribeRecordData), разбираем обратно.
+                var value = rec.Value;
+                var priority = "10", weight = "10", port = "443";
+
+                if (rec.Type.Equals("SRV", StringComparison.OrdinalIgnoreCase))
+                {
+                    var m = System.Text.RegularExpressions.Regex.Match(rec.Value,
+                        @"^(?<target>.+):(?<port>\d+)\s*\(priority=(?<priority>\d+),\s*weight=(?<weight>\d+)\)$");
+                    if (m.Success)
+                    {
+                        value = m.Groups["target"].Value.Trim();
+                        port = m.Groups["port"].Value;
+                        priority = m.Groups["priority"].Value;
+                        weight = m.Groups["weight"].Value;
+                    }
+                    else
+                    {
+                        AppendLog($"Не удалось разобрать составное значение SRV-записи '{rec.Name}' ('{rec.Value}') - пропускаю, добавь вручную.");
+                        skipped++;
+                        continue;
+                    }
+                }
+                else if (rec.Type.Equals("MX", StringComparison.OrdinalIgnoreCase))
+                {
+                    var m = System.Text.RegularExpressions.Regex.Match(rec.Value, @"^(?<exchange>.+?)\s*\(preference=(?<preference>\d+)\)$");
+                    if (m.Success)
+                    {
+                        value = m.Groups["exchange"].Value.Trim();
+                        priority = m.Groups["preference"].Value;
+                    }
+                    // Не распарсилось (например файл от версии, где MX ещё не показывал preference) -
+                    // используем значение как есть, приоритет по умолчанию (10).
+                }
+
+                var (addCmdlet, addParams) = BuildAddRecordCommand(zoneName, scopeName, rec.Type, rec.Name, value, priority, weight, port);
+                var (_, addLog) = await Task.Run(() => DnsHelper.Invoke(addCmdlet, addParams));
+
+                if (WasSuccess(addLog))
+                {
+                    if (isConflict) overwritten++; else added++;
+                    FileLogger.LogChange("RECORD ADD", zoneName,
+                        $"Scope={scopeName} {rec.Type} {rec.Name} -> {value} (импорт{(isConflict ? ", перезапись" : "")})", true, null);
+                }
+                else
+                {
+                    failed++;
+                    AppendLog($"ОШИБКА при импорте записи '{rec.Name}' ({rec.Type}): {addLog}");
+                    FileLogger.LogChange("RECORD ADD", zoneName,
+                        $"Scope={scopeName} {rec.Type} {rec.Name} -> {value} (импорт)", false, addLog);
+                }
+            }
+
+            AppendLog($"Импорт завершён: добавлено {added}, перезаписано {overwritten}, пропущено {skipped}, ошибок {failed}.");
             await RefreshRecordsAsync();
         }
 
@@ -2407,12 +2635,21 @@ namespace DnsToolWinForms
             !log.Contains("ОШИБКА:") &&
             !log.Contains("ИСКЛЮЧЕНИЕ");
 
+        /// <summary>Имя сервера, с которого реально сделан запрос - для заголовка экспорта. Пусто в DnsHelper.ComputerName = локальная машина.</summary>
+        private static string CurrentServerLabel() =>
+            string.IsNullOrWhiteSpace(DnsHelper.ComputerName) ? Environment.MachineName : DnsHelper.ComputerName;
+
         /// <summary>
         /// Экспортирует список строк (то, что сейчас отображено в списке - с учётом
         /// применённых фильтра и сортировки) в текстовый файл. Путь выбирается диалогом
         /// сохранения - явно, как и просили, а не в жёстко зашитое место.
         /// </summary>
-        private void ExportListToFile(IEnumerable<string> lines, string suggestedFileName)
+        /// <param name="headerLine">
+        /// Необязательная строка-заголовок (дата + сервер, откуда выгрузка) - пишется первой
+        /// строкой файла с префиксом "#", чтобы при последующем импорте её можно было
+        /// однозначно отличить от настоящих строк с записями и просто пропустить.
+        /// </param>
+        private void ExportListToFile(IEnumerable<string> lines, string suggestedFileName, string headerLine = null)
         {
             var linesList = lines.ToList();
             if (linesList.Count == 0)
@@ -2431,7 +2668,10 @@ namespace DnsToolWinForms
 
             try
             {
-                File.WriteAllLines(dlg.FileName, linesList);
+                var output = new List<string>();
+                if (!string.IsNullOrEmpty(headerLine)) output.Add("# " + headerLine);
+                output.AddRange(linesList);
+                File.WriteAllLines(dlg.FileName, output);
                 AppendLog($"OK: список ({linesList.Count} строк) сохранён в файл: {dlg.FileName}");
             }
             catch (Exception ex)
