@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Management.Automation;
+using System.Security.Principal;
 using System.Text;
 
 namespace DnsToolWinForms
@@ -21,12 +22,41 @@ namespace DnsToolWinForms
         /// </summary>
         public static string ComputerName { get; set; } = "";
 
+        /// <summary>
+        /// Запущен ли ТЕКУЩИЙ процесс с повышенными правами (Admin Approval Mode). Манифест
+        /// теперь asInvoker (не requireAdministrator) - элевация не гарантирована, приложение
+        /// само проверяет её при необходимости и предлагает перезапуск через MainForm.
+        /// </summary>
+        public static bool IsRunningElevated
+        {
+            get
+            {
+                using var identity = WindowsIdentity.GetCurrent();
+                var principal = new WindowsPrincipal(identity);
+                return principal.IsInRole(WindowsBuiltInRole.Administrator);
+            }
+        }
+
+        /// <summary>Грубое, но рабочее распознавание "отказано в доступе" - не завязано на язык ОС.</summary>
+        private static bool LooksLikeAccessDenied(string text) =>
+            !string.IsNullOrEmpty(text) && (
+                text.IndexOf("Отказано в доступе", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                text.IndexOf("Access is denied", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                text.IndexOf("0x80070005", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                text.IndexOf("PermissionDenied", StringComparison.Ordinal) >= 0);
+
         // Активная CimSession с явными кредами (если авторизовались вручную через ServerAuthDialog)
         // и сервер, для которого она создана. Пока эти два совпадают с текущим ComputerName -
         // используем именно её вместо -ComputerName (иначе PowerShell снова попробует текущую
         // Windows-учётку и получит тот же отказ в правах).
         private static object _activeCimSession;
         private static string _activeCimSessionComputer;
+        // PowerShell-раннспейс, которым была создана _activeCimSession - держим живым, пока живёт
+        // сама сессия. Раньше он создавался через "using" и уничтожался сразу по выходу из
+        // TryAuthenticate, а New-CimSession, судя по всему, привязывает созданную "живую" сессию
+        // к своему раннспейсу - Dispose() раннспейса утаскивал за собой и саму CimSession,
+        // из-за чего при следующем реальном использовании прилетал ObjectDisposedException.
+        private static PowerShell _activeCimSessionRunspace;
 
         /// <summary>
         /// Пробует создать CimSession с явно указанными логином/паролем (New-CimSession -Credential).
@@ -34,28 +64,35 @@ namespace DnsToolWinForms
         /// официальный способ подключиться под другой учёткой - через уже готовую CimSession.
         /// При успехе сессия сохраняется и автоматически используется во всех дальнейших вызовах
         /// Invoke() для этого же сервера, пока не сменится целевой сервер или не завершится приложение.
+        ///
+        /// Транспорт - обычный WinRM (Kerberos, либо NTLM через TrustedHosts на клиенте), без
+        /// HTTPS. Это ровно то же самое, что использует стандартный `Enter-PSSession`/оснастка
+        /// `dnsmgmt.msc` при удалённом управлении - никакого нестандартного протокола или
+        /// собственного шифрования, только штатные механизмы Windows.
         /// </summary>
         /// <param name="password">
         /// Пароль уже в виде SecureString - строится сразу в UI посимвольно, минуя лишний
         /// plain-string на этом уровне (меньше времени пароль существует в памяти как обычная строка).
         /// </param>
-        /// <param name="useSsl">
-        /// Если true - WinRM идёт через HTTPS (порт 5986) вместо HTTP (5985), полное TLS-шифрование
-        /// транспорта поверх и так уже зашифрованных Kerberos/NTLM-сообщений. Требует валидного
-        /// сертификата на целевом сервере и включённого HTTPS-листенера WinRM.
-        /// </param>
-        public static (bool Success, string Error) TryAuthenticate(string computerName, string username, System.Security.SecureString password, bool useSsl)
+        public static (bool Success, string Error) TryAuthenticate(string computerName, string username, System.Security.SecureString password)
         {
+            // Объявлен снаружи try, чтобы catch тоже мог освободить раннспейс, если он успел
+            // создаться до исключения - -ErrorAction Stop обычно превращает ошибку именно
+            // в исключение (см. FriendlyHintForWinRmError/ActionPreferenceStopException выше),
+            // а не просто выставляет HadErrors, так что этот путь - самый частый, не редкий.
+            PowerShell ps = null;
             try
             {
                 var credential = new PSCredential(username, password);
 
-                using var ps = PowerShell.Create();
+                // ВАЖНО: без "using" - этот раннспейс должен пережить сам метод, пока жива
+                // созданная им CimSession (см. комментарий у _activeCimSessionRunspace выше).
+                // Освобождаем вручную в каждой ветке (ошибка/успех), но НЕ в конце метода.
+                ps = PowerShell.Create();
                 ps.AddCommand("New-CimSession")
                   .AddParameter("ComputerName", computerName)
-                  .AddParameter("Credential", credential);
-                if (useSsl) ps.AddParameter("UseSSL");
-                ps.AddParameter("ErrorAction", "Stop");
+                  .AddParameter("Credential", credential)
+                  .AddParameter("ErrorAction", "Stop");
 
                 var results = ps.Invoke();
 
@@ -63,25 +100,66 @@ namespace DnsToolWinForms
                 {
                     var err = ps.Streams.Error.FirstOrDefault();
                     var msg = err != null ? DescribeException(err.Exception) : "неизвестная ошибка при создании сессии";
-                    return (false, msg);
+                    var hint = FriendlyHintForWinRmError(msg);
+                    ps.Dispose(); // сессия не создалась (или ошибка) - раннспейс больше не нужен
+                    return (false, string.IsNullOrEmpty(hint) ? msg : $"{msg}\n\nПОДСКАЗКА: {hint}");
                 }
 
                 var session = results.FirstOrDefault()?.BaseObject;
                 if (session == null)
+                {
+                    ps.Dispose();
                     return (false, "New-CimSession не вернул объект сессии");
+                }
 
-                DisposeActiveCimSession(); // закрываем предыдущую, если была - не плодим висящие подключения
+                DisposeActiveCimSession(); // закрываем предыдущую (и её раннспейс), если была
                 _activeCimSession = session;
                 _activeCimSessionComputer = computerName;
+                _activeCimSessionRunspace = ps; // держим живым - см. комментарий у поля выше
                 return (true, null);
             }
             catch (System.Exception ex)
             {
+                ps?.Dispose(); // самый частый путь ошибок (-ErrorAction Stop бросает исключение) - не забываем освободить
                 return (false, DescribeException(ex));
             }
         }
 
-        /// <summary>Закрывает и забывает активную CimSession, если она есть.</summary>
+        /// <summary>
+        /// Классическая ошибка WinRM "клиенту не удаётся обработать запрос... используйте HTTPS
+        /// или TrustedHosts" - типично возникает, когда сервер указан по IP, а не по имени
+        /// (или клиент не в домене - Kerberos тогда недоступен в принципе). Подсказываем
+        /// конкретное действие, а не просто пересказываем то же сообщение целиком.
+        /// </summary>
+        private static string FriendlyHintForWinRmError(string errorText)
+        {
+            if (errorText == null) return null;
+
+            if (errorText.IndexOf("TrustedHosts", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return "Это стандартное ограничение WinRM для не-Kerberos сценариев (сервер указан по IP, " +
+                       "а не по имени, либо эта машина не входит в домен). На ЭТОЙ машине выполни в " +
+                       "PowerShell от администратора:\n" +
+                       "Set-Item WSMan:\\localhost\\Client\\TrustedHosts -Value \"<имя_или_IP_сервера>\" -Concatenate -Force";
+            }
+
+            if (errorText.IndexOf("брандмауэре", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                errorText.IndexOf("подсети", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return "WinRM вообще не смог достучаться до сервера (это не про логин/пароль). Проверь по " +
+                       "порядку: имя/IP введено без опечаток и реально резолвится (сервер сам себя " +
+                       "проверить не может - попробуй ping с ЭТОЙ машины); на целевом сервере запущена " +
+                       "служба WinRM (winrm quickconfig от администратора на самом сервере); сетевой " +
+                       "профиль активного адаптера на целевом сервере - не \"Общедоступная сеть\" " +
+                       "(Public): по умолчанию для этого профиля правило файрвола WinRM разрешает " +
+                       "подключения только из той же подсети - если клиент в другой подсети, нужно сменить " +
+                       "профиль на \"Частная\"/\"Домен\" или явно расширить правило файрвола на эту подсеть.";
+            }
+
+            return null;
+        }
+
+        /// <summary>Закрывает и забывает активную CimSession (и её раннспейс), если она есть.</summary>
         public static void DisposeActiveCimSession()
         {
             if (_activeCimSession is IDisposable disposable)
@@ -90,6 +168,12 @@ namespace DnsToolWinForms
             }
             _activeCimSession = null;
             _activeCimSessionComputer = null;
+
+            if (_activeCimSessionRunspace != null)
+            {
+                try { _activeCimSessionRunspace.Dispose(); } catch { /* не критично */ }
+                _activeCimSessionRunspace = null;
+            }
         }
 
         /// <summary>
@@ -161,7 +245,39 @@ namespace DnsToolWinForms
             }
             catch (System.Exception ex)
             {
-                log.AppendLine($"ИСКЛЮЧЕНИЕ при вызове {cmdlet}: {DescribeException(ex)}");
+                var description = DescribeException(ex);
+
+                // WIN32 1722 "Сервер RPC недоступен" при ЛОКАЛЬНОМ вызове (ComputerName пуст,
+                // то есть мы обращаемся к этой же машине) почти всегда означает одно: на ней
+                // не установлена роль DNS Server (и/или RSAT: DNS Server Tools) - службе DNS
+                // просто некому ответить по RPC, дело не в конкретных зонах или правах.
+                var isLocalCall = string.IsNullOrWhiteSpace(ComputerName) &&
+                                   (parameters == null || !parameters.ContainsKey("ComputerName"));
+                if (isLocalCall && description.IndexOf("1722", StringComparison.Ordinal) >= 0 &&
+                    description.IndexOf("RPC", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    log.AppendLine(
+                        "ОШИБКА: эта машина, похоже, не DNS-сервер (или на ней не установлены RSAT: DNS Server Tools) - " +
+                        "локальная служба DNS не отвечает по RPC. Если приложение запущено НЕ на самом " +
+                        "DNS-сервере: укажи целевой сервер в поле \"Целевой DNS-сервер\" сверху. Если это " +
+                        "должен быть DNS-сервер: установи роль DNS Server, либо хотя бы RSAT: DNS Server " +
+                        "Tools (PowerShell от администратора: Add-WindowsFeature RSAT-DNS-Server).");
+                    return (new List<PSObject>(), log.ToString());
+                }
+
+                // "Отказано в доступе" при ЛОКАЛЬНОМ вызове, когда процесс НЕ повышен (манифест
+                // теперь asInvoker, а не requireAdministrator - см. app.manifest) - почти всегда
+                // означает именно нехватку прав администратора для локальной работы с DNS Server,
+                // а не проблему с конкретной зоной/записью. MainForm перехватывает этот текст и
+                // сама предлагает перезапуск с UAC - здесь только формируем понятное сообщение.
+                if (isLocalCall && !IsRunningElevated && LooksLikeAccessDenied(description))
+                {
+                    log.AppendLine(
+                        "ОШИБКА: нужны права администратора для локальной работы с DNS Server на этой машине.");
+                    return (new List<PSObject>(), log.ToString());
+                }
+
+                log.AppendLine($"ИСКЛЮЧЕНИЕ при вызове {cmdlet}: {description}");
                 return (new List<PSObject>(), log.ToString());
             }
 
@@ -172,9 +288,20 @@ namespace DnsToolWinForms
                     var msg = err.ToString();
                     if (!string.IsNullOrEmpty(err.FullyQualifiedErrorId))
                         msg += $" [{err.FullyQualifiedErrorId}]";
-                    if (err.Exception != null)
-                        msg += " | " + DescribeException(err.Exception);
-                    log.AppendLine("ОШИБКА: " + msg);
+                    var exceptionDescription = err.Exception != null ? DescribeException(err.Exception) : null;
+                    if (exceptionDescription != null) msg += " | " + exceptionDescription;
+
+                    var isLocalCallForThisError = string.IsNullOrWhiteSpace(ComputerName) &&
+                                                   (parameters == null || !parameters.ContainsKey("ComputerName"));
+                    if (isLocalCallForThisError && !IsRunningElevated &&
+                        LooksLikeAccessDenied(exceptionDescription ?? msg))
+                    {
+                        log.AppendLine("ОШИБКА: нужны права администратора для локальной работы с DNS Server на этой машине.");
+                    }
+                    else
+                    {
+                        log.AppendLine("ОШИБКА: " + msg);
+                    }
                 }
             }
             else
@@ -339,6 +466,22 @@ namespace DnsToolWinForms
         {
             var sb = new StringBuilder();
             sb.Append(ex.GetType().FullName).Append(": ").Append(ex.Message);
+
+            // PowerShell-специфика: ActionPreferenceStopException (возникает из-за -ErrorAction Stop,
+            // который мы сами просим) и вообще любой RuntimeException оборачивает РЕАЛЬНУЮ причину
+            // в ErrorRecord, а не в обычный .InnerException - без этого разворачивания видно только
+            // generic-фразу ("операция остановлена..."), а не настоящий код ошибки WinRM/CIM/чего угодно.
+            // Разворачиваем рекурсивно - вдруг внутри ErrorRecord ещё один CimException с деталями.
+            if (ex is System.Management.Automation.IContainsErrorRecord icer && icer.ErrorRecord != null)
+            {
+                var er = icer.ErrorRecord;
+                if (!string.IsNullOrEmpty(er.FullyQualifiedErrorId))
+                    sb.Append(" | FullyQualifiedErrorId=").Append(er.FullyQualifiedErrorId);
+                if (er.CategoryInfo != null)
+                    sb.Append(" | Category=").Append(er.CategoryInfo);
+                if (er.Exception != null && !ReferenceEquals(er.Exception, ex))
+                    sb.Append(" → ").Append(DescribeException(er.Exception));
+            }
 
             foreach (var propName in new[] { "StatusCode", "NativeErrorCode", "ErrorSource", "MessageId" })
             {
