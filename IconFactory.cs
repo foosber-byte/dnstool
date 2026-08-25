@@ -95,6 +95,18 @@ namespace DnsToolWinForms
             return bmp;
         }
 
+        public static Bitmap Import()
+        {
+            var bmp = NewCanvas(out var g);
+            using var pen = new Pen(PenColor, 1.6f);
+            g.DrawLine(pen, 9, 7, 9, 16);
+            var arrow = new[] { new Point(5, 10), new Point(9, 6), new Point(13, 10) }; // стрелка вверх - зеркально Export
+            g.DrawLines(pen, arrow);
+            g.DrawLine(pen, 3, 3, 15, 3); // "источник" сверху, тоже зеркально
+            g.Dispose();
+            return bmp;
+        }
+
         public static Bitmap Check()
         {
             var bmp = NewCanvas(out var g);
