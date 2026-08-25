@@ -96,11 +96,31 @@ namespace DnsToolWinForms
             var updaterScript = Path.Combine(tempDir, "update.bat");
 
             // /XF исключает локальные файлы - именно они НЕ должны быть тронуты обновлением.
+            //
+            // Раньше здесь была фиксированная пауза "timeout /t 2" перед копированием - этого
+            // иногда не хватало, чтобы процесс приложения реально завершился и отпустил файл
+            // .exe (Application.Exit() не гарантирует мгновенное закрытие: закрытие CimSession,
+            // финализаторы и т.п. могут занять больше времени). Если .exe оставался залоченным,
+            // robocopy молча не мог его перезаписать - а скрипт всё равно шёл дальше и запускал
+            // СТАРЫЙ .exe, как будто обновление прошло успешно. Теперь вместо фиксированной паузы -
+            // реальный опрос через tasklist, жив ли ещё процесс, с разумным пределом ожидания (30 сек).
             var scriptLines = new[]
             {
                 "@echo off",
-                "timeout /t 2 /nobreak >nul",
-                $"robocopy \"{sourceDir}\" \"{appDir}\" /E /XF settings.ini changes.log changes.log.bak_* *.dns *.dns.bak_* /NFL /NDL /NJH /NJS /R:3 /W:1",
+                "setlocal",
+                "set RETRIES=0",
+                ":waitloop",
+                $"tasklist /FI \"IMAGENAME eq {exeName}\" 2>NUL | find /I \"{exeName}\" >NUL",
+                "if \"%ERRORLEVEL%\"==\"0\" (",
+                "    set /a RETRIES+=1",
+                "    if %RETRIES% GEQ 30 goto docopy",
+                "    timeout /t 1 /nobreak >nul",
+                "    goto waitloop",
+                ")",
+                ":docopy",
+                // /R:10 /W:1 - на случай остаточной блокировки файла уже после завершения процесса
+                // (антивирус, индексатор и т.п.) - раньше было /R:3, теперь больше запас на всякий случай.
+                $"robocopy \"{sourceDir}\" \"{appDir}\" /E /XF settings.ini changes.log changes.log.bak_* *.dns *.dns.bak_* /NFL /NDL /NJH /NJS /R:10 /W:1",
                 $"start \"\" \"{Path.Combine(appDir, exeName)}\"",
                 $"rmdir /S /Q \"{tempDir}\""
             };

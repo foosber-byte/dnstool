@@ -4,9 +4,16 @@
   <trustInfo xmlns="urn:schemas-microsoft-com:asm.v2">
     <security>
       <requestedPrivileges xmlns="urn:schemas-microsoft-com:asm.v3">
-        <!-- requireAdministrator - без этого командлеты Get-DnsServer* / Add-DnsServer*
-             будут падать с Access Denied, даже если ты локальный админ. -->
-        <requestedExecutionLevel level="requireAdministrator" uiAccess="false"/>
+        <!-- asInvoker (не requireAdministrator!) - приложение стартует БЕЗ UAC-запроса
+             всегда, вне зависимости от режима работы. Раньше тут было requireAdministrator
+             безусловно - но элевация реально нужна ТОЛЬКО для локального режима (командлеты
+             DnsServer против DNS-службы на этой же машине), а для удалённого режима
+             (управление другим сервером через -ComputerName/CimSession) права проверяются
+             на удалённой стороне через Kerberos/NTLM - локальная элевация вообще не при чём.
+             Теперь при реальном отказе именно из-за нехватки локальных прав приложение само
+             предлагает перезапуститься с UAC - см. DnsHelper.cs (IsRunningElevated,
+             детектирование Access Denied) и MainForm.cs (диалог перезапуска). -->
+        <requestedExecutionLevel level="asInvoker" uiAccess="false"/>
       </requestedPrivileges>
     </security>
   </trustInfo>
@@ -21,4 +28,3 @@
     </asmv3:windowsSettings>
   </asmv3:application>
 </assembly>
-

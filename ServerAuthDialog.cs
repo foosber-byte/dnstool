@@ -11,6 +11,17 @@ namespace DnsToolWinForms
     /// конкретном сервере). Логин/пароль → пробуем создать CimSession → зелёный OK с
     /// автозакрытием при успехе, красная ошибка с возможностью повторить при неудаче.
     /// Каждая попытка (успешная или нет) фиксируется в changes.log - пароль туда не попадает.
+    ///
+    /// Транспорт - обычный WinRM (Kerberos, либо NTLM через TrustedHosts на клиенте), без
+    /// HTTPS и без пропуска проверки сертификата - эти два варианта были в приложении раньше
+    /// (v2.1.0), но убраны в v2.2.1: на практике HTTPS-путь давал непредсказуемые ошибки
+    /// (сертификат не подходит для IP-адреса, либо сервер отвечал "Отказано в доступе" даже
+    /// после успешного TLS-рукопожатия - конфигурация HTTPS-листенера WinRM на конкретном
+    /// сервере, а не то, что можно починить в этом приложении), а сам флаг "пропустить проверку
+    /// сертификата" по своей сути ослабляет защиту транспорта и закономерно вызывает вопросы
+    /// при разборе кода службой ИБ. Обычный путь (TrustedHosts + Kerberos/NTLM) - это то же
+    /// самое, что использует стандартный `Enter-PSSession`/`dnsmgmt.msc` при удалённом
+    /// управлении, ничего сверх штатных возможностей Windows.
     /// </summary>
     public static class ServerAuthDialog
     {
@@ -25,7 +36,7 @@ namespace DnsToolWinForms
                 MaximizeBox = false,
                 MinimizeBox = false,
                 ShowInTaskbar = false,
-                ClientSize = new Size(420, 236),
+                ClientSize = new Size(420, 260),
                 Font = new Font("Segoe UI", 9F),
                 Icon = AppIcon.Current
             };
@@ -60,30 +71,24 @@ namespace DnsToolWinForms
                 Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right
             };
 
-            var chkUseSsl = new CheckBox
-            {
-                Text = "Подключаться через HTTPS (WinRM, порт 5986)",
-                Location = new Point(110, 120),
-                AutoSize = true
-            };
-            var hintSsl = HelpIcon.Create(toolTip, "Требует HTTPS-листенер WinRM и валидный сертификат на целевом сервере.");
-            hintSsl.Location = new Point(388, 118);
-            hintSsl.Anchor = AnchorStyles.Top | AnchorStyles.Right;
-
             var progress = new ProgressBar
             {
-                Location = new Point(16, 152),
+                Location = new Point(16, 128),
                 Size = new Size(388, 18),
                 Style = ProgressBarStyle.Marquee,
                 MarqueeAnimationSpeed = 30,
                 Visible = false
             };
 
-            var lblStatus = new Label
+            var txtStatus = new TextBox
             {
-                Location = new Point(16, 152),
-                Size = new Size(388, 40),
-                Font = new Font("Segoe UI", 9F, FontStyle.Bold),
+                Location = new Point(16, 128),
+                Size = new Size(388, 92),
+                Multiline = true,
+                ReadOnly = true,
+                ScrollBars = ScrollBars.Vertical,
+                Font = new Font("Segoe UI", 8.5F),
+                ForeColor = Color.DimGray,
                 Text = ""
             };
 
@@ -91,7 +96,7 @@ namespace DnsToolWinForms
             {
                 Text = "Отмена",
                 DialogResult = DialogResult.Cancel,
-                Location = new Point(232, 192),
+                Location = new Point(232, 218),
                 Size = new Size(80, 32),
                 Anchor = AnchorStyles.Bottom | AnchorStyles.Right
             };
@@ -99,11 +104,10 @@ namespace DnsToolWinForms
             var btnLogin = new Button
             {
                 Text = "Войти",
-                Location = new Point(324, 192),
+                Location = new Point(324, 218),
                 Size = new Size(80, 32),
                 Anchor = AnchorStyles.Bottom | AnchorStyles.Right
             };
-
             var success = false;
 
             async void DoLogin(object s, EventArgs e)
@@ -112,8 +116,8 @@ namespace DnsToolWinForms
 
                 if (string.IsNullOrEmpty(login) || txtPassword.Text.Length == 0)
                 {
-                    lblStatus.ForeColor = Color.Firebrick;
-                    lblStatus.Text = "Заполни логин и пароль.";
+                    txtStatus.ForeColor = Color.Firebrick;
+                    txtStatus.Text = "Заполни логин и пароль.";
                     return;
                 }
 
@@ -125,27 +129,23 @@ namespace DnsToolWinForms
                 securePassword.MakeReadOnly();
                 txtPassword.Clear();
 
-                var useSsl = chkUseSsl.Checked;
-
                 btnLogin.Enabled = false;
                 btnCancel.Enabled = false;
                 txtLogin.Enabled = false;
                 txtPassword.Enabled = false;
-                chkUseSsl.Enabled = false;
-                lblStatus.Text = "";
+                txtStatus.Text = "";
                 progress.Visible = true;
 
-                var (ok, error) = await Task.Run(() => DnsHelper.TryAuthenticate(server, login, securePassword, useSsl));
+                var (ok, error) = await Task.Run(() => DnsHelper.TryAuthenticate(server, login, securePassword));
 
                 progress.Visible = false;
 
-                FileLogger.LogChange("AUTH", server,
-                    $"пользователь ввёл логин '{login}'" + (useSsl ? " (HTTPS)" : ""), ok, ok ? null : error);
+                FileLogger.LogChange("AUTH", server, $"пользователь ввёл логин '{login}'", ok, ok ? null : error);
 
                 if (ok)
                 {
-                    lblStatus.ForeColor = Color.SeaGreen;
-                    lblStatus.Text = "OK: подключение успешно.";
+                    txtStatus.ForeColor = Color.SeaGreen;
+                    txtStatus.Text = "OK: подключение успешно.";
                     success = true;
                     await Task.Delay(900); // дать секунду увидеть зелёный статус перед закрытием
                     dlg.DialogResult = DialogResult.OK;
@@ -153,14 +153,13 @@ namespace DnsToolWinForms
                 }
                 else
                 {
-                    lblStatus.ForeColor = Color.Firebrick;
-                    lblStatus.Text = "Ошибка логина или пароля - проверьте права на сервере." +
-                                      (string.IsNullOrEmpty(error) ? "" : $"\n({error})");
+                    txtStatus.ForeColor = Color.Firebrick;
+                    txtStatus.Text = "Не удалось подключиться." +
+                                      (string.IsNullOrEmpty(error) ? " Причина не определена." : $"\n{error}");
                     btnLogin.Enabled = true;
                     btnCancel.Enabled = true;
                     txtLogin.Enabled = true;
                     txtPassword.Enabled = true;
-                    chkUseSsl.Enabled = true;
                 }
             }
 
@@ -169,7 +168,7 @@ namespace DnsToolWinForms
             dlg.Controls.AddRange(new Control[]
             {
                 lblInfo, lblLogin, txtLogin, hintLogin, lblPassword, txtPassword,
-                chkUseSsl, hintSsl, progress, lblStatus, btnCancel, btnLogin
+                progress, txtStatus, btnCancel, btnLogin
             });
             dlg.AcceptButton = btnLogin;
             dlg.CancelButton = btnCancel;
