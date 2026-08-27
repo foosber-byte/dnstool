@@ -36,6 +36,22 @@ namespace DnsToolWinForms
             return bmp;
         }
 
+        /// <summary>Тот же круговой значок обновления, но с буквой "R" внутри - для перезагрузки зоны (dnscmd /ZoneReload), чтобы отличать от обычного обновления списка.</summary>
+        public static Bitmap RefreshZone()
+        {
+            var bmp = NewCanvas(out var g);
+            using var pen = new Pen(PenColor, 1.6f);
+            g.DrawArc(pen, 3, 3, 12, 12, -30, 270);
+            var arrow = new[] { new Point(14, 3), new Point(16, 6), new Point(12, 6) };
+            using var brush = new SolidBrush(PenColor);
+            g.FillPolygon(brush, arrow);
+            using var font = new Font("Segoe UI", 6.5f, FontStyle.Bold);
+            var textSize = g.MeasureString("R", font);
+            g.DrawString("R", font, brush, (Size - textSize.Width) / 2f, (Size - textSize.Height) / 2f + 1);
+            g.Dispose();
+            return bmp;
+        }
+
         public static Bitmap Add()
         {
             var bmp = NewCanvas(out var g);
@@ -87,10 +103,10 @@ namespace DnsToolWinForms
         {
             var bmp = NewCanvas(out var g);
             using var pen = new Pen(PenColor, 1.6f);
-            g.DrawLine(pen, 9, 2, 9, 11);
-            var arrow = new[] { new Point(5, 8), new Point(9, 12), new Point(13, 8) };
+            g.DrawLine(pen, 9, 7, 9, 16);
+            var arrow = new[] { new Point(5, 10), new Point(9, 6), new Point(13, 10) }; // стрелка вверх
             g.DrawLines(pen, arrow);
-            g.DrawLine(pen, 3, 15, 15, 15); // лоток
+            g.DrawLine(pen, 3, 3, 15, 3); // "источник" сверху
             g.Dispose();
             return bmp;
         }
@@ -99,10 +115,10 @@ namespace DnsToolWinForms
         {
             var bmp = NewCanvas(out var g);
             using var pen = new Pen(PenColor, 1.6f);
-            g.DrawLine(pen, 9, 7, 9, 16);
-            var arrow = new[] { new Point(5, 10), new Point(9, 6), new Point(13, 10) }; // стрелка вверх - зеркально Export
+            g.DrawLine(pen, 9, 2, 9, 11);
+            var arrow = new[] { new Point(5, 8), new Point(9, 12), new Point(13, 8) }; // стрелка вниз
             g.DrawLines(pen, arrow);
-            g.DrawLine(pen, 3, 3, 15, 3); // "источник" сверху, тоже зеркально
+            g.DrawLine(pen, 3, 15, 15, 15); // лоток снизу
             g.Dispose();
             return bmp;
         }

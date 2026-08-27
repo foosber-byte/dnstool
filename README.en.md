@@ -6,7 +6,7 @@ A WinForms app for managing a Windows DNS Server — covers what `dnsmgmt.msc` d
 records inside a Zone Scope shown as a tree, client subnets, Query Resolution Policies,
 remote management of another server with its own authentication, self-updating from GitHub.
 
-Works through the built-in `DnsServer` PowerShell module. Author: foosber, 2026. v2.4.0.
+Works through the built-in `DnsServer` PowerShell module. Author: foosber, 2026. v2.7.3.
 
 ## Requirements
 
@@ -30,7 +30,7 @@ session, doesn't nag on repeated failures.
 
 ## Interface
 
-- **Icons instead of text buttons** on all 4 tabs — drawn in-house via GDI+
+- **Icons instead of text buttons** on all 3 tabs — drawn in-house via GDI+
   (`IconFactory.cs`). Actions needing input (create a zone/scope/record/subnet/policy) open
   a dialog via the "+" icon. The filter stays a plain field — live search matters more than
   compactness there.
@@ -43,49 +43,81 @@ session, doesn't nag on repeated failures.
   the record tree).
 - Collapsible output block without losing accumulated text.
 
-## "Zones" tab
+## "Scopes and Records" tab (zones, scopes and records — all in one tree)
 
-`Get-DnsServerZone`, `Add-DnsServerPrimaryZone`, `Remove-DnsServerZone`. Types on creation:
-AD-domain / AD-forest / file-based (`.dns`). `[AD]`/`[file]` tag in the list. A source strip
-below the list (master servers for Secondary zones). Filter, sort, export.
+There's no separate "Zones" tab anymore — zone management moved here, and the zone list
+itself became one of the tree's levels. Two clearly bordered blocks, sitting **side by side
+horizontally** (not stacked — saves vertical space for the tree and record list below), each
+sized to fit its own content — **"Zone management"** (create/delete/reload/export/refresh
+the list) and **"Scope/record management"** (create/delete a scope, refresh the current
+scope's records) — so it's obvious which button does what, now that everything lives on one
+tab.
 
-**Double-clicking a zone** jumps straight to its scopes on the "Scopes and Records" tab. The
-reload icon runs `dnscmd /ZoneReload`, always locally (ignores the target server).
+**Tree**: the top level is servers ("Local" + any server successfully connected to via the
+"Target DNS server" panel); inside each server — **"Forward Lookup Zones"** and **"Reverse
+Lookup Zones"** (determined by name — `.in-addr.arpa`/`.ip6.arpa` at the end means reverse;
+a purely visual grouping of already-loaded data, no extra server round-trip); inside each
+category — the zones themselves; inside a zone — its scopes; inside a scope — records
+grouped by compound names into folders (like `dnsmgmt.msc`): `admin.pro32connect` → folder
+`pro32connect`, item `admin`. Every level loads lazily (on first selection/expansion of its
+node) — nothing is pulled from the server needlessly. Grouping records into folders is
+visual, from already loaded data; a folder is only a node with its own child nodes —
+single-level records don't turn into extra tree branches. On the right: the current
+folder's contents (folders sorted first, like a file explorer). Split position is
+remembered (`RecordsTreeSplitter`). The **server node** in the tree is highlighted (blue
+background, white bold text) — the top level is immediately obvious, not confused with
+zones/scopes on the tab.
 
-## "Scopes and Records" tab
+**Zone management**: creation (`Add-DnsServerPrimaryZone`, types AD-domain/AD-forest/
+file-based), deletion (`Remove-DnsServerZone`), reload from disk (an icon with an "R" inside
+it — `dnscmd /ZoneReload`, always locally, ignores the target server) — all three apply to
+the zone **currently selected in the tree**. Export — the zone names of the current
+(expanded) server to a `.txt` file. The line below the two blocks shows the selected zone's
+source with mixed formatting (not just plain gray text): the words "Source" and "master
+servers" are underlined, the zone type (Primary/Secondary/Stub) and the actual master
+server addresses/file path are bold.
 
-**Tree**: top level is the zone's scopes (loaded lazily, on first selection); inside, records
-are grouped by compound names into folders (like `dnsmgmt.msc`):
-`admin.pro32connect` → folder `pro32connect`, item `admin`. Grouping is visual, from already
-loaded data; a folder is only a node with its own child nodes — single-level records don't
-turn into extra tree branches. On the right: the current folder's contents (folders sorted
-first, like a file explorer). Split position is remembered (`RecordsTreeSplitter`).
+**Multiple servers at once**: a connection to a server (see "Managing a different server
+remotely" below) is cached for the app's entire lifetime, and this is true for **several**
+servers in parallel — switching between them in the tree doesn't drop the connection to the
+others. Clicking a server node in the tree switches the "Target DNS server" panel at the top
+to it.
 
 **Adding a record** respects the current folder — `test` inside `pro32connect` becomes
 `test.pro32connect`. `@` inside a folder means the folder itself. Priority/Weight/Port
 fields only show for SRV/MX.
 
-**Creating a "folder"**: right-click a scope/folder → a wildcard `*` record inside a new
-subdomain (`*.sales` → IP) — both a real record and a way to make the subdomain show up as
-a folder.
+**Creating a "folder"**: right-click a scope/folder → a dialog with a choice of mode. By
+default — a wildcard `*` record inside a new subdomain (`*.sales` → IP): both a real record
+and a way to make the subdomain show up as a folder (a node only becomes a folder if it has
+child nodes of its own — a bare `sales` record with nothing nested under it stays a plain
+row, not a folder). The second option is literally like "New Domain" in `dnsmgmt.msc` (a
+record named exactly like the folder, no `*`) — with an explicit warning: that way the
+folder **won't show up** in the tree until there's another record nested inside it.
 
 **File-based mode** (notepad icon) — a workaround for Secondary zones where normal adding
 fails with `WIN32 9611`: edits the scope's `.dns` file directly, always locally, with a
 backup and `dnscmd /ZoneReload`. Shows an explicit warning every time.
 
-**Export** to `.txt` — the first line records the date and the **server name** the export
-came from (`DnsHelper.ComputerName` if a target server is set, otherwise the local machine's
-name), so the file makes sense even without extra context.
+**Export** to `.txt` — the server name the export came from (`DnsHelper.ComputerName` if a
+target server is set, otherwise the local machine's name) is included both in the **file
+name** and as the first line inside the file alongside the date, so the file makes sense
+even without extra context.
 
-**Import** from such a file (the up-arrow icon): folder rows (`📁 name FOLDER N records.`)
+**Import** from such a file (the up-arrow icon): folder rows (`[FLDR] name N records.`)
 are recognized and not imported as records — instead, the app offers to create the matching
 subdomain via a wildcard record (with an IP for each, if wanted). There's an "Exclude @
 records" checkbox. Import targets the currently selected folder/scope (same as adding a
 single record manually). SRV/MX values are parsed back from the export's composite text
 (`target:port (priority=..., weight=...)` / `exchange (preference=...)`); if a record from
-the file already exists in the scope (by name+type), it asks whether to overwrite or skip,
-with a bulk "all" option — after which further conflicts are resolved automatically without
-asking again.
+the file already exists in the scope (by name+type), the conflict dialog shows **both the
+existing and the new value side by side** (immediately clear whether it's an exact duplicate
+or genuinely different IP/name), and asks whether to overwrite or skip, with a bulk "all"
+option — after which further conflicts are resolved automatically without asking again. The
+"what's already in the scope" list is refreshed as the import proceeds (not just once at the
+start) — if the file itself contains a duplicate record, the second occurrence is also
+recognized as a conflict against what was just added in the same run, instead of hitting the
+DNS server directly and failing with "record already exists".
 
 **Cmdlets**: A/AAAA/CNAME/PTR/MX use type-specific cmdlets (`Add-DnsServerResourceRecordA`
 etc.). NS/TXT/SRV — only the generic `Add-DnsServerResourceRecord -NS/-Txt/-Srv` (no
@@ -94,7 +126,14 @@ dedicated cmdlets exist). `@` in the name field means the zone root.
 **Editing** — a re-create (add new first, then remove old, so nothing's lost on failure),
 except for **CNAME**: DNS won't let a CNAME coexist with another record under the same name
 even momentarily, so the order is reversed (delete first, then add, with rollback on
-failure). Deletion passes the full record object via `-InputObject`.
+failure). Deletion passes the full record object via `-InputObject`; you can select
+**multiple** records at once (plain multi-selection in the list, right-clicking inside an
+existing selection doesn't clear it) — one confirmation for the whole batch, folders among
+the selection are silently skipped.
+
+**Operation progress**: every successful add/delete/import of a record gets its own line in
+the output block, `OK: record "name" (type) value added to zone "...", scope "..."` (same
+for deletes), rather than just a final summary.
 
 **Checking a record** — nslookup (`Resolve-DnsName`, reformatted output) and Ping (with
 `-t`, source `-S`, CP866 encoding).
@@ -109,6 +148,16 @@ failure). Deletion passes the full record object via `-InputObject`.
 `Criteria`, the scope in `Content` (not `ClientSubnet`/`ZoneScope` — those are `Add-...`
 parameter names, not `Get-...` property names). Multiple comma-separated subnets (logical
 OR).
+
+Subnets in a policy's description are shown as **names only**, without the CIDR in
+parentheses — it used to show the actual range next to the name (`net_100 (10.0.1.0/24)`),
+but that "(...)" isn't part of the subnet's actual name, and pasting a line like that into
+the "Subnets" field of the new-policy dialog produced an error ("no such subnet exists").
+The CIDR is still visible — on the "Subnets" tab.
+
+**Important, easy to forget**: policies (like client subnets) **don't replicate** to backup
+domain controllers — they're tied locally to this server/zone. So the same policy name on
+**different** zones isn't a conflict (the policy-creation dialog says so explicitly).
 
 ## Managing a different server remotely
 
@@ -141,7 +190,9 @@ delay on the "Delete" button.
 - **`changes.log`** next to the exe — only real changes and auth attempts, no password.
 - **Error diagnostics**: full unwrapping of CIM/PowerShell exceptions; clear messages
   instead of raw dumps for common cases — "not a DNS server" (`WIN32 1722`), "administrator
-  rights needed" (see above), "WinRM unreachable" (TrustedHosts/firewall/network profile).
+  rights needed" (see above), "WinRM unreachable" (TrustedHosts/firewall/network profile),
+  "zone doesn't support Zone Scopes" (`WIN32 9603` — conditional forwarder zones and similar
+  types structurally don't support scopes, it's not a temporary issue).
 - **Updates**: a button in "About" pulls the latest GitHub release, compares versions
   (`AppVersion.cs`), downloads and installs via a `.bat` script (waits for the process to
   exit via `tasklist`, copies with `robocopy`, restarts). Doesn't touch
@@ -176,7 +227,12 @@ instead of the `PackageReference`.
 
 ## Things you could add yourself
 
-Viewing records outside a scope; stricter input validation (IP/CIDR).
+- Viewing records outside a scope; stricter input validation (IP/CIDR).
+- Creating a conditional forwarder zone with the same options as `dnsmgmt.msc`
+  (`Add-DnsServerConditionalForwarderZone`) — right now the "Zone management" block can only
+  create a Primary zone (AD-integrated or file-based); conditional forwarder zones don't
+  support Zone Scopes at all (see the `WIN32 9603` diagnostic above), so this would be a
+  separate, self-contained branch of functionality, not overlapping with the rest of the app.
 
 ## License
 

@@ -15,7 +15,7 @@ namespace DnsToolWinForms
                 MaximizeBox = false,
                 MinimizeBox = false,
                 ShowInTaskbar = false,
-                ClientSize = new Size(400, 210),
+                ClientSize = new Size(420, 250),
                 Font = new Font("Segoe UI", 9F),
                 Icon = AppIcon.Current
             };
@@ -31,20 +31,36 @@ namespace DnsToolWinForms
             };
 
             var lblName = new Label { Text = "Имя политики:", Location = new Point(16, 48), AutoSize = true };
-            var txtName = new TextBox { Location = new Point(140, 44), Width = 240 };
+            var txtName = new TextBox { Location = new Point(140, 44), Width = 260 };
 
             var lblSubnets = new Label { Text = "Подсети:", Location = new Point(16, 84), AutoSize = true };
-            var txtSubnets = new TextBox { Location = new Point(140, 80), Width = 214 };
-            var hintSubnets = HelpIcon.Create(toolTip, "Одна или несколько подсетей через запятую (логическое ИЛИ).");
-            hintSubnets.Location = new Point(360, 82);
+            var txtSubnets = new TextBox { Location = new Point(140, 80), Width = 234 };
+            var hintSubnets = HelpIcon.Create(toolTip, "Одна или несколько подсетей через запятую (логическое ИЛИ). Только имена подсетей, без описания в скобках (то, что в скобках - не часть имени, добавить как есть будет ошибкой).");
+            hintSubnets.Location = new Point(380, 82);
 
             var lblScope = new Label { Text = "Scope:", Location = new Point(16, 120), AutoSize = true };
-            var txtScope = new TextBox { Location = new Point(140, 116), Width = 240 };
+            var txtScope = new TextBox { Location = new Point(140, 116), Width = 260 };
 
-            var btnCancel = new Button { Text = "Отмена", DialogResult = DialogResult.Cancel, Location = new Point(216, 156), Size = new Size(80, 32) };
-            var btnCreate = new Button { Text = "Создать", DialogResult = DialogResult.OK, Location = new Point(300, 156), Size = new Size(80, 32) };
+            // Не временное сообщение в логе, а постоянная заметка прямо в диалоге - легко
+            // забыть (как выяснилось), а последствие не всегда очевидно в моменте создания.
+            var lblReplicationNote = new Label
+            {
+                Text = "Политики (как и клиентские подсети) НЕ реплицируются на резервные контроллеры " +
+                       "домена - привязаны локально к этому серверу/зоне. Поэтому одно и то же имя " +
+                       "политики у разных зон - НЕ конфликт.",
+                ForeColor = Color.DarkOrange,
+                Location = new Point(16, 152),
+                Size = new Size(388, 42)
+            };
 
-            dlg.Controls.AddRange(new Control[] { lblHint, lblName, txtName, lblSubnets, txtSubnets, hintSubnets, lblScope, txtScope, btnCancel, btnCreate });
+            var btnCancel = new Button { Text = "Отмена", DialogResult = DialogResult.Cancel, Location = new Point(236, 200), Size = new Size(80, 32) };
+            var btnCreate = new Button { Text = "Создать", DialogResult = DialogResult.OK, Location = new Point(320, 200), Size = new Size(80, 32) };
+
+            dlg.Controls.AddRange(new Control[]
+            {
+                lblHint, lblName, txtName, lblSubnets, txtSubnets, hintSubnets, lblScope, txtScope,
+                lblReplicationNote, btnCancel, btnCreate
+            });
             dlg.AcceptButton = btnCreate;
             dlg.CancelButton = btnCancel;
 
