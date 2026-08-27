@@ -22,16 +22,10 @@ namespace DnsToolWinForms
         private RichTextBox txtOutput;
         private TabControl tabs; // нужен, чтобы программно переключать вкладку (напр. двойной клик по зоне -> вкладка Scopes)
 
-        // ---- вкладка "Зоны" ----
-        private ListBox lstZones;
+        // ---- управление зонами (теперь часть вкладки "Scopes и записи", отдельной вкладки "Зоны" больше нет) ----
         private TextBox txtNewZoneName;
         private ComboBox cmbZoneType;
-        private TextBox txtZoneFilter;
-        private ComboBox cmbZoneSort;
-        private Button btnZoneSortDir;
-        private Label lblZoneSource;
-        private List<PSObject> _lastZones = new List<PSObject>();
-        private bool _zoneSortAscending = true;
+        private RichTextBox lblZoneSource;
 
         // ---- вкладка "Scopes и записи" ----
         private ComboBox cmbScopeZoneName;   // имя зоны, для которой смотрим scopes - выпадающий список
@@ -52,14 +46,27 @@ namespace DnsToolWinForms
         private Button btnRecordSortDir;
         private bool _recordSortAscending = true;
 
-        // ---- дерево записей (верхний уровень - scope'ы зоны, ниже - папки по точкам в имени,
-        //      как в dnsmgmt.msc; scope подгружается лениво, при первом выборе/раскрытии) ----
+        // ---- дерево записей (верхний уровень - серверы: локальный + любой, к которому успешно
+        //      подключались; внутри каждого сервера - зоны; внутри зоны - scope'ы; внутри scope -
+        //      папки по точкам в имени, как в dnsmgmt.msc. Каждый уровень подгружается лениво,
+        //      при первом выборе/раскрытии - ничего не тянется впустую) ----
         private TreeView treeRecordFolders;
         private RecordTreeNode _currentFolderNode; // какая "папка" сейчас показана в правом списке
         private Label lblCurrentFolderPath; // "Добавление в: ..." - видимая подсказка, куда попадёт новая запись
         private Dictionary<RecordTreeNode, TreeNode> _folderToTreeNode = new Dictionary<RecordTreeNode, TreeNode>();
         private Dictionary<RecordTreeNode, string> _folderRootToScopeName = new Dictionary<RecordTreeNode, string>(); // корень поддерева -> имя scope, которому он принадлежит
         private HashSet<TreeNode> _loadedScopeTreeNodes = new HashSet<TreeNode>(); // какие узлы scope уже реально подгружены (не просто заглушка)
+        private HashSet<TreeNode> _loadedZoneTreeNodes = new HashSet<TreeNode>();  // то же самое для узлов зоны (подгружены её scope'ы или ещё нет)
+        private HashSet<TreeNode> _loadedServerTreeNodes = new HashSet<TreeNode>(); // то же самое для узлов сервера (подгружены его зоны или ещё нет)
+
+        /// <summary>Маркер узла-сервера в дереве (верхний уровень). Пустая ServerName = локальный компьютер.</summary>
+        private class ServerNodeMarker { public string ServerName; }
+
+        /// <summary>Маркер узла-зоны в дереве (второй уровень, внутри узла сервера).</summary>
+        private class ZoneNodeMarker { public string ServerName; public string ZoneName; }
+
+        /// <summary>Маркер узла-категории "Зоны прямого/обратного просмотра" - чисто визуальная группировка, без обращения к серверу (определяется по имени уже загруженных зон).</summary>
+        private class ZoneCategoryMarker { public string ServerName; public bool IsReverse; }
 
         /// <summary>
         /// Узел дерева записей - группировка по составным именам (admin.pro32connect -> папка
@@ -100,14 +107,13 @@ namespace DnsToolWinForms
             InitializeComponent();
             Shown += async (s, e) =>
             {
-                // Вкладка "Зоны" открыта по умолчанию при старте - SelectedIndexChanged для неё
-                // не сработает (переключения не было), поэтому грузим её явно здесь же.
-                // Если первый запрос не удался (например, эта машина вообще не DNS-сервер) -
-                // второй такой же запрос обречён точно так же, не дублируем одну и ту же ошибку.
-                var zonesLoaded = await RefreshZonesAsync();
-                if (zonesLoaded) await RefreshAllZoneCombosAsync();
+                // Вкладка "Scopes и записи" (со встроенным теперь управлением зонами) открыта
+                // по умолчанию при старте - SelectedIndexChanged для неё не сработает
+                // (переключения не было), поэтому инициализируем дерево явно здесь же.
+                InitializeServerTree();
+                await RefreshAllZoneCombosAsync(); // держим внутренний список зон наполненным - используется в подсказках диалогов создания
             };
-            FormClosing += (s, e) => DnsHelper.DisposeActiveCimSession();
+            FormClosing += (s, e) => DnsHelper.DisposeAllCimSessions();
         }
 
         // ============================================================
@@ -128,7 +134,9 @@ namespace DnsToolWinForms
 
             tabs = new TabControl { Dock = DockStyle.Fill };
 
-            tabs.TabPages.Add(BuildZonesTab());
+            // Отдельной вкладки "Зоны" больше нет - управление зонами (создать/удалить/
+            // перезагрузить) переехало в верхний блок вкладки "Scopes и записи", а сам список
+            // зон теперь один из уровней общего дерева (Сервер -> прямые/обратные -> Зона -> Scope).
             tabs.TabPages.Add(BuildScopesTab());
             tabs.TabPages.Add(BuildSubnetsTab());
             tabs.TabPages.Add(BuildPoliciesTab());
@@ -139,13 +147,11 @@ namespace DnsToolWinForms
             {
                 switch (tabs.SelectedIndex)
                 {
-                    case 0 when lstZones.Items.Count == 0:
-                        await RefreshZonesAsync();
-                        break;
-                    case 1 when cmbScopeZoneName.Items.Count == 0:
+                    case 0 when treeRecordFolders.Nodes.Count == 0:
+                        InitializeServerTree();
                         await RefreshAllZoneCombosAsync();
                         break;
-                    case 3 when cmbPolicyZoneName.Items.Count == 0:
+                    case 2 when cmbPolicyZoneName.Items.Count == 0:
                         await RefreshAllZoneCombosAsync();
                         break;
                 }
@@ -316,8 +322,11 @@ namespace DnsToolWinForms
 
         private void UpdateTargetComputerName()
         {
+            // Раньше здесь была инвалидация закешированной сессии при смене сервера - но раз
+            // теперь сессии кешируются ПО СЕРВЕРАМ (см. DnsHelper._cimSessions), а не одна на
+            // всё приложение, переключение целевого сервера больше не должно их разрушать -
+            // подключение к каждому серверу живёт весь срок работы приложения независимо.
             DnsHelper.ComputerName = chkLocalServer.Checked ? "" : cmbTargetServer.Text.Trim();
-            DnsHelper.InvalidateCimSessionIfServerChanged(DnsHelper.ComputerName);
         }
 
         private async Task TestTargetServerConnectionAsync()
@@ -333,6 +342,8 @@ namespace DnsToolWinForms
             if (WasSuccess(log))
             {
                 AppendLog($"OK: подключение работает, зон видно: {results.Count}");
+                AddServerRootIfMissing(""); // на случай, если это первое обращение к дереву вообще - гарантируем, что "Локальный" тоже на месте
+                AddServerRootIfMissing(target); // появляется в дереве слева на вкладке "Scopes и записи", тем же принципом, что и локальный
                 return;
             }
 
@@ -352,7 +363,11 @@ namespace DnsToolWinForms
                 var (retryResults, retryLog) = await Task.Run(() => DnsHelper.Invoke("Get-DnsServerZone"));
                 AppendLog(retryLog);
                 if (WasSuccess(retryLog))
+                {
                     AppendLog($"OK: подключение работает, зон видно: {retryResults.Count}");
+                    AddServerRootIfMissing(""); // та же подстраховка - гарантируем "Локальный" на месте
+                    AddServerRootIfMissing(target); // тот же принцип - сервер появляется в дереве после успешной авторизации
+                }
             }
         }
 
@@ -366,7 +381,7 @@ namespace DnsToolWinForms
             var header = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, FlowDirection = FlowDirection.LeftToRight };
             header.Controls.Add(new Label { Text = "Вывод:", AutoSize = true, Margin = new Padding(0, 6, 8, 0), Font = new Font(Font, FontStyle.Bold) });
 
-            var btnToggle = new Button { Text = "▲ Свернуть", AutoSize = true };
+            var btnToggle = new Button { Text = "▼ Свернуть", AutoSize = true };
             header.Controls.Add(btnToggle);
 
             var btnClear = new Button { Text = "Очистить", AutoSize = true };
@@ -394,7 +409,7 @@ namespace DnsToolWinForms
                 collapsed = !collapsed;
                 txtOutput.Visible = !collapsed;
                 panel.Height = collapsed ? collapsedHeight : expandedHeight;
-                btnToggle.Text = collapsed ? "▼ Показать" : "▲ Свернуть";
+                btnToggle.Text = collapsed ? "▲ Показать" : "▼ Свернуть";
             };
 
             panel.Controls.Add(txtOutput);
@@ -529,187 +544,114 @@ namespace DnsToolWinForms
         };
 
         // ============================================================
-        //  Вкладка "Зоны"
+        //  Управление зонами (теперь часть вкладки "Scopes и записи")
         // ============================================================
 
-        private TabPage BuildZonesTab()
+        /// <summary>Идёт вверх от текущего выбранного узла дерева, пока не найдёт узел-зону (или её потомка).</summary>
+        private (string ServerName, string ZoneName) GetSelectedZoneContext()
         {
-            lstZones = new ListBox();
-
-            var btnRefresh = IconFactory.CreateButton(IconFactory.Refresh(), "Обновить список зон", _toolTip,
-                async (s, e) => await RefreshZonesAsync());
-
-            var btnReloadZone = IconFactory.CreateButton(IconFactory.Refresh(), "Перезагрузить выбранную зону (dnscmd /ZoneReload, только локально)", _toolTip,
-                async (s, e) => await ReloadSelectedZoneAsync());
-
-            var btnAdd = IconFactory.CreateButton(IconFactory.Add(), "Создать зону...", _toolTip, async (s, e) =>
+            var node = treeRecordFolders.SelectedNode;
+            while (node != null)
             {
-                var (name, type) = AddZoneDialog.Show();
-                if (name == null) return; // отмена
-                txtNewZoneName.Text = name;
-                cmbZoneType.Text = type;
-                await AddZoneAsync();
-            });
-
-            var btnRemove = IconFactory.CreateButton(IconFactory.Delete(), "Удалить выбранную зону", _toolTip,
-                async (s, e) => await RemoveZoneAsync());
-
-            // Поля остаются - их заполняет диалог выше (AddZoneDialog), а не человек напрямую.
-            // Не убираю сами TextBox/ComboBox, потому что RemoveZoneAsync/AddZoneAsync их читают -
-            // так меньше правок в уже работающей логике, поля просто больше не показываются на экране.
-            txtNewZoneName = Tb(220, "имя зоны, напр. corp.local");
-            cmbZoneType = new ComboBox { Width = 230, DropDownStyle = ComboBoxStyle.DropDownList };
-            cmbZoneType.Items.AddRange(new object[]
-            {
-                "AD-интегрированная (реплика: домен)",
-                "AD-интегрированная (реплика: лес)",
-                "Файловая (.dns на диске)"
-            });
-            cmbZoneType.SelectedIndex = 0;
-
-            // Фильтр + сортировка + экспорт - применяются к тому, что уже загружено (без нового
-            // обращения к серверу), поэтому реагируют мгновенно по мере ввода. Фильтр оставляем
-            // видимым текстовым полем (не прячем за иконку) - живой поиск по мере набора важнее
-            // компактности именно для него.
-            txtZoneFilter = new TextBox { Width = 160, Margin = new Padding(2) };
-            txtZoneFilter.TextChanged += (s, e) => RenderZonesList();
-
-            cmbZoneSort = new ComboBox { Width = 90, DropDownStyle = ComboBoxStyle.DropDownList, Margin = new Padding(2) };
-            cmbZoneSort.Items.AddRange(new object[] { "Имя", "Тип" });
-            cmbZoneSort.SelectedIndex = 0;
-            cmbZoneSort.SelectedIndexChanged += (s, e) => RenderZonesList();
-
-            btnZoneSortDir = new Button { Text = "▲", Width = 32, Margin = new Padding(2) };
-            btnZoneSortDir.Click += (s, e) =>
-            {
-                _zoneSortAscending = !_zoneSortAscending;
-                btnZoneSortDir.Text = _zoneSortAscending ? "▲" : "▼";
-                RenderZonesList();
-            };
-
-            var btnExportZones = IconFactory.CreateButton(IconFactory.Export(), "Экспорт в файл...", _toolTip,
-                (s, e) => ExportListToFile(lstZones.Items.Cast<string>(), $"zones_{DateTime.Now:yyyyMMdd_HHmmss}.txt"));
-
-            var column = Column(
-                Row(btnRefresh, btnAdd, btnRemove, btnReloadZone,
-                    new Label { Text = "  Фильтр:", AutoSize = true, Margin = new Padding(4, 6, 0, 2) }, txtZoneFilter,
-                    cmbZoneSort, btnZoneSortDir, btnExportZones)
-            );
-
-            // Оборачиваем список зон в панель с полоской "источник зоны" снизу - показывает,
-            // AD/файл это или Secondary с её мастер-серверами, для выбранной строки списка.
-            var zonesWrapper = new Panel { Dock = DockStyle.Fill };
-            lstZones.Dock = DockStyle.Fill;
-            lstZones.Font = new Font("Consolas", 9F);
-            lstZones.HorizontalScrollbar = true;
-            lstZones.SelectedIndexChanged += (s, e) => ShowZoneSource();
-
-            // Двойной клик по зоне - сразу переходим на вкладку "Scopes и записи" с этой
-            // зоной уже выбранной и её scope'ами загруженными, не нужно переключаться и
-            // подставлять имя зоны вручную. Порядок важен: сначала грузим данные, и только
-            // потом переключаем вкладку - иначе собственное автообновление вкладки при
-            // переключении (см. tabs.SelectedIndexChanged) может гонкой затереть то, что
-            // мы только что установили.
-            lstZones.DoubleClick += async (s, e) =>
-            {
-                if (lstZones.SelectedItem == null) return;
-                var zoneName = lstZones.SelectedItem.ToString().Split('[')[0].Trim();
-
-                await RefreshAllZoneCombosAsync(); // гарантированно наполняем список зон, прежде чем выбирать в нём
-                cmbScopeZoneName.Text = zoneName;
-                await RefreshScopesAsync();
-                tabs.SelectedIndex = 1; // "Scopes и записи" - переключаем последним, когда всё уже готово
-            };
-
-            lblZoneSource = new Label
-            {
-                Text = "Источник: -",
-                Dock = DockStyle.Bottom,
-                Height = 36,
-                Padding = new Padding(6, 4, 6, 4),
-                BackColor = Color.WhiteSmoke,
-                ForeColor = Color.DimGray,
-                Font = new Font("Segoe UI", 8.5F),
-                AutoEllipsis = true
-            };
-
-            zonesWrapper.Controls.Add(lstZones);
-            zonesWrapper.Controls.Add(lblZoneSource);
-
-            return WrapTab("Зоны", column, zonesWrapper);
+                if (node.Tag is ZoneNodeMarker zm) return (zm.ServerName, zm.ZoneName);
+                node = node.Parent;
+            }
+            return (null, null);
         }
 
-        /// <summary>Перестраивает lstZones из _lastZones с учётом текущего фильтра и сортировки - без обращения к серверу.</summary>
-        private void RenderZonesList()
+        /// <summary>Добавляет фрагмент текста в конец RichTextBox с нужным начертанием - для составных строк вроде "Источник зоны", где разные слова должны выглядеть по-разному.</summary>
+        private static void AppendStyled(RichTextBox rtb, string text, bool bold = false, bool underline = false)
         {
-            var filter = (txtZoneFilter.Text ?? "").Trim();
-
-            var rows = _lastZones.Select(z =>
-            {
-                var name = z.Properties["ZoneName"]?.Value?.ToString() ?? "";
-                var zoneType = z.Properties["ZoneType"]?.Value?.ToString() ?? "?";
-                var isDsIntegrated = z.Properties["IsDsIntegrated"]?.Value;
-                var tag = zoneType == "Primary"
-                    ? (isDsIntegrated is bool b && b ? "Primary/AD" : "Primary/файл")
-                    : zoneType;
-                return (name, tag, display: $"{name,-35} [{tag}]");
-            });
-
-            if (!string.IsNullOrEmpty(filter))
-                rows = rows.Where(r => r.name.IndexOf(filter, StringComparison.OrdinalIgnoreCase) >= 0 ||
-                                        r.tag.IndexOf(filter, StringComparison.OrdinalIgnoreCase) >= 0);
-
-            rows = cmbZoneSort.SelectedIndex == 1
-                ? (_zoneSortAscending ? rows.OrderBy(r => r.tag, StringComparer.OrdinalIgnoreCase) : rows.OrderByDescending(r => r.tag, StringComparer.OrdinalIgnoreCase))
-                : (_zoneSortAscending ? rows.OrderBy(r => r.name, StringComparer.OrdinalIgnoreCase) : rows.OrderByDescending(r => r.name, StringComparer.OrdinalIgnoreCase));
-
-            lstZones.Items.Clear();
-            foreach (var r in rows) lstZones.Items.Add(r.display);
-            ShowZoneSource();
+            rtb.SelectionStart = rtb.TextLength;
+            rtb.SelectionLength = 0;
+            var style = FontStyle.Regular;
+            if (bold) style |= FontStyle.Bold;
+            if (underline) style |= FontStyle.Underline;
+            rtb.SelectionFont = new Font(rtb.Font, style);
+            rtb.AppendText(text);
         }
 
-        /// <summary>Показывает источник выбранной зоны - AD/файл для Primary, мастер-серверы для Secondary/Stub.</summary>
-        private void ShowZoneSource()
+        /// <summary>Показывает источник выбранной зоны (AD/файл для Primary, мастер-серверы для Secondary/Stub) - вызывается при выборе узла-зоны в дереве.</summary>
+        private async Task ShowSelectedZoneSourceAsync(string serverName, string zoneName)
         {
             if (lblZoneSource == null) return;
 
-            if (lstZones.SelectedItem == null)
+            var previousComputerName = DnsHelper.ComputerName;
+            DnsHelper.ComputerName = serverName ?? ""; // временно - именно для ЭТОГО запроса, чей бы узел ни был выбран
+
+            var (results, _) = await Task.Run(() => DnsHelper.Invoke("Get-DnsServerZone", new Dictionary<string, object> { ["Name"] = zoneName }));
+
+            DnsHelper.ComputerName = previousComputerName; // возвращаем как было - сам факт запроса источника не должен молча менять текущий сервер
+
+            lblZoneSource.Clear();
+            var z = results.FirstOrDefault();
+            if (z == null)
             {
-                lblZoneSource.Text = "Источник: - (выбери зону в списке)";
+                AppendStyled(lblZoneSource, "Источник", underline: true);
+                lblZoneSource.AppendText(": -");
                 return;
             }
 
-            var name = lstZones.SelectedItem.ToString().Split('[')[0].Trim();
-            var z = _lastZones.FirstOrDefault(o =>
-                string.Equals(o.Properties["ZoneName"]?.Value?.ToString(), name, StringComparison.OrdinalIgnoreCase));
-
-            if (z == null) { lblZoneSource.Text = "Источник: -"; return; }
-
             var zoneType = z.Properties["ZoneType"]?.Value?.ToString() ?? "?";
+
             if (zoneType == "Primary")
             {
                 var isDsIntegrated = z.Properties["IsDsIntegrated"]?.Value;
-                lblZoneSource.Text = (isDsIntegrated is bool b && b)
-                    ? "Источник: Primary, хранится в Active Directory (реплицируется между DC домена)."
-                    : $"Источник: Primary, файловая зона - {z.Properties["ZoneFile"]?.Value}";
+                AppendStyled(lblZoneSource, "Источник", underline: true);
+                lblZoneSource.AppendText(": ");
+                AppendStyled(lblZoneSource, "Primary", bold: true);
+                if (isDsIntegrated is bool b && b)
+                {
+                    lblZoneSource.AppendText(", хранится в Active Directory (реплицируется между DC домена).");
+                }
+                else
+                {
+                    lblZoneSource.AppendText(", файловая зона - ");
+                    AppendStyled(lblZoneSource, z.Properties["ZoneFile"]?.Value?.ToString() ?? "", bold: true);
+                }
             }
             else
             {
                 var masters = DnsHelper.FlattenPropertyValue(z.Properties["MasterServers"]?.Value);
-                lblZoneSource.Text = string.IsNullOrEmpty(masters)
-                    ? $"Источник: {zoneType} (только чтение здесь), мастер-серверы не указаны."
-                    : $"Источник: {zoneType} (только чтение здесь) - мастер-серверы: {masters}";
+                AppendStyled(lblZoneSource, "Источник", underline: true);
+                lblZoneSource.AppendText(": ");
+                AppendStyled(lblZoneSource, zoneType, bold: true);
+                lblZoneSource.AppendText(" (только чтение здесь)");
+                if (string.IsNullOrEmpty(masters))
+                {
+                    lblZoneSource.AppendText(", ");
+                    AppendStyled(lblZoneSource, "мастер-серверы", underline: true);
+                    lblZoneSource.AppendText(" не указаны.");
+                }
+                else
+                {
+                    lblZoneSource.AppendText(" - ");
+                    AppendStyled(lblZoneSource, "мастер-серверы", underline: true);
+                    lblZoneSource.AppendText(": ");
+                    AppendStyled(lblZoneSource, masters, bold: true);
+                }
             }
         }
 
-        private async Task<bool> RefreshZonesAsync()
+        /// <summary>Экспортирует имена зон ТЕКУЩЕГО (уже развёрнутого) сервера в файл - обе категории, прямые и обратные вместе.</summary>
+        private void ExportCurrentServerZones()
         {
-            AppendLog("Загружаю список зон...");
-            var (results, log) = await Task.Run(() => DnsHelper.Invoke("Get-DnsServerZone"));
-            AppendLog(log);
-            _lastZones = results;
-            RenderZonesList();
-            return WasSuccess(log);
+            var serverName = DnsHelper.ComputerName;
+            var serverNode = AddServerRootIfMissing(serverName); // вернёт уже существующий узел, если он есть
+            if (!_loadedServerTreeNodes.Contains(serverNode))
+            {
+                AppendLog("Сначала разверни сервер в дереве слева, чтобы загрузить список его зон.");
+                return;
+            }
+
+            var lines = new List<string>();
+            foreach (TreeNode categoryNode in serverNode.Nodes)
+                foreach (TreeNode zoneNode in categoryNode.Nodes)
+                    if (zoneNode.Tag is ZoneNodeMarker zm)
+                        lines.Add(zm.ZoneName);
+
+            ExportListToFile(lines, $"zones_{SanitizeForFileName(CurrentServerLabel())}_{DateTime.Now:yyyyMMdd_HHmmss}.txt",
+                $"Экспортировано {DateTime.Now:yyyy-MM-dd HH:mm:ss} с сервера: {CurrentServerLabel()}");
         }
 
         private async Task AddZoneAsync()
@@ -744,18 +686,23 @@ namespace DnsToolWinForms
             var (_, log) = await Task.Run(() => DnsHelper.Invoke("Add-DnsServerPrimaryZone", parameters));
             AppendLog(log);
             FileLogger.LogChange("ZONE ADD", zoneName, $"Тип={kindLabel}", WasSuccess(log), log);
-            await RefreshZonesAsync();
+
+            // Обновляем список зон именно ТЕКУЩЕГО сервера (того, что сейчас в панели подключения) - не всё дерево.
+            var serverName = DnsHelper.ComputerName;
+            var serverNode = AddServerRootIfMissing(serverName);
+            await LoadServerZonesIntoTreeAsync(serverNode, serverName);
+            serverNode.Expand();
         }
 
         private async Task RemoveZoneAsync()
         {
-            if (lstZones.SelectedItem == null)
+            var (serverName, zoneName) = GetSelectedZoneContext();
+            if (zoneName == null)
             {
-                AppendLog("Сначала выбери зону в списке.");
+                AppendLog("Выбери зону в дереве слева.");
                 return;
             }
 
-            var zoneName = lstZones.SelectedItem.ToString().Split('[')[0].Trim();
             if (!DangerConfirmDialog.Show(
                     "Удаление зоны",
                     $"   Удалить зону \"{zoneName}\" целиком?",
@@ -768,7 +715,10 @@ namespace DnsToolWinForms
             var (_, log) = await Task.Run(() => DnsHelper.Invoke("Remove-DnsServerZone", parameters));
             AppendLog(log);
             FileLogger.LogChange("ZONE DELETE", zoneName, "-", WasSuccess(log), log);
-            await RefreshZonesAsync();
+
+            var serverNode = AddServerRootIfMissing(serverName);
+            await LoadServerZonesIntoTreeAsync(serverNode, serverName);
+            serverNode.Expand();
         }
 
         /// <summary>
@@ -779,22 +729,20 @@ namespace DnsToolWinForms
         /// </summary>
         private async Task ReloadSelectedZoneAsync()
         {
-            if (lstZones.SelectedItem == null)
+            var (_, zoneName) = GetSelectedZoneContext();
+            if (zoneName == null)
             {
-                AppendLog("Сначала выбери зону в списке.");
+                AppendLog("Выбери зону в дереве слева.");
                 return;
             }
 
-            var zoneName = lstZones.SelectedItem.ToString().Split('[')[0].Trim();
             AppendLog($"Перезагружаю зону '{zoneName}' (dnscmd /ZoneReload)...");
-
             var result = await Task.Run(() => RunDnscmdZoneReload(zoneName));
             AppendLog(result);
 
             var success = result.StartsWith("OK");
             FileLogger.LogChange("ZONE RELOAD", zoneName, "dnscmd /ZoneReload", success, success ? null : result);
-
-            await RefreshZonesAsync();
+            // Список зон не меняется от перезагрузки содержимого - обновлять дерево не нужно.
         }
 
         // ============================================================
@@ -803,7 +751,7 @@ namespace DnsToolWinForms
 
         private TabPage BuildScopesTab()
         {
-            lstRecords = new ListBox();
+            lstRecords = new ListBox { SelectionMode = SelectionMode.MultiExtended };
 
             // Дерево записей: верхний уровень - scope'ы зоны, внутри каждого - папки записей
             // (группировка по составным именам, как в dnsmgmt.msc). Scope подгружается ЛЕНИВО -
@@ -812,28 +760,62 @@ namespace DnsToolWinForms
             treeRecordFolders = new TreeView { HideSelection = false };
             treeRecordFolders.AfterSelect += async (s, e) =>
             {
-                if (e.Node?.Tag is RecordTreeNode node)
+                var node = e.Node;
+                if (node?.Tag is RecordTreeNode rtn)
                 {
-                    _currentFolderNode = node;
-                    var root = node;
+                    _currentFolderNode = rtn;
+                    var root = rtn;
                     while (root.Parent != null) root = root.Parent;
                     if (_folderRootToScopeName.TryGetValue(root, out var ownerScope))
                         txtRecordScopeName.Text = ownerScope;
                     UpdateCurrentFolderPathLabel();
                     RenderRecordsList();
                 }
-                else if (e.Node?.Tag is string scopeName && !_loadedScopeTreeNodes.Contains(e.Node))
+                else if (node?.Tag is string scopeNameUnloaded && !_loadedScopeTreeNodes.Contains(node))
                 {
-                    await LoadScopeIntoTreeAsync(e.Node, scopeName);
-                    e.Node.Expand();
+                    await LoadScopeIntoTreeAsync(node, scopeNameUnloaded);
+                    node.Expand();
+                }
+                else if (node?.Tag is ZoneNodeMarker zoneMarker)
+                {
+                    SetCurrentServerContext(zoneMarker.ServerName);
+                    cmbScopeZoneName.Text = zoneMarker.ZoneName;
+                    await ShowSelectedZoneSourceAsync(zoneMarker.ServerName, zoneMarker.ZoneName);
+                    if (!_loadedZoneTreeNodes.Contains(node))
+                    {
+                        await LoadZoneScopesIntoTreeAsync(node, zoneMarker.ServerName, zoneMarker.ZoneName);
+                        node.Expand();
+                    }
+                }
+                else if (node?.Tag is ZoneCategoryMarker)
+                {
+                    // "Зоны прямого/обратного просмотра" - чисто визуальная группировка, уже
+                    // полностью построена при загрузке зон сервера (LoadServerZonesIntoTreeAsync) -
+                    // ничего дополнительно подгружать не нужно, просто обычное разворачивание узла.
+                }
+                else if (node?.Tag is ServerNodeMarker serverMarker)
+                {
+                    if (!_loadedServerTreeNodes.Contains(node))
+                    {
+                        await LoadServerZonesIntoTreeAsync(node, serverMarker.ServerName);
+                        node.Expand();
+                    }
+                    else
+                    {
+                        SetCurrentServerContext(serverMarker.ServerName);
+                    }
                 }
             };
-            // Подстраховка: если раскрыть стрелкой узел scope, который ещё не выбирали кликом -
-            // тот же ленивый догруз, чтобы не остаться с одной заглушкой "..." внутри.
+            // Подстраховка: если раскрыть стрелкой узел (сервер/зону/scope), который ещё не
+            // выбирали кликом - тот же ленивый догруз, чтобы не остаться с одной заглушкой "..." внутри.
             treeRecordFolders.BeforeExpand += async (s, e) =>
             {
-                if (e.Node?.Tag is string scopeName && !_loadedScopeTreeNodes.Contains(e.Node))
-                    await LoadScopeIntoTreeAsync(e.Node, scopeName);
+                if (e.Node?.Tag is string scopeNameUnloaded && !_loadedScopeTreeNodes.Contains(e.Node))
+                    await LoadScopeIntoTreeAsync(e.Node, scopeNameUnloaded);
+                else if (e.Node?.Tag is ZoneNodeMarker zoneMarker && !_loadedZoneTreeNodes.Contains(e.Node))
+                    await LoadZoneScopesIntoTreeAsync(e.Node, zoneMarker.ServerName, zoneMarker.ZoneName);
+                else if (e.Node?.Tag is ServerNodeMarker serverMarker && !_loadedServerTreeNodes.Contains(e.Node))
+                    await LoadServerZonesIntoTreeAsync(e.Node, serverMarker.ServerName);
             };
 
             // Правый клик по дереву - выделить узел под курсором, затем меню "Создать папку".
@@ -876,21 +858,47 @@ namespace DnsToolWinForms
                 if (e.Button == MouseButtons.Right)
                 {
                     var idx = lstRecords.IndexFromPoint(e.Location);
-                    if (idx >= 0) lstRecords.SelectedIndex = idx;
+                    // Клик ВНУТРИ уже выделенной группы - сохраняем всё выделение (как в
+                    // проводнике), иначе множественный выбор было бы бессмысленно заводить -
+                    // правый клик тут же сбрасывал бы его до одной строки под курсором.
+                    if (idx >= 0 && !lstRecords.SelectedIndices.Contains(idx))
+                        lstRecords.SelectedIndex = idx;
                 }
             };
             lstRecords.ContextMenuStrip = recordsContextMenu;
 
             cmbScopeZoneName = new ComboBox { Width = 220, DropDownStyle = ComboBoxStyle.DropDown };
-            var btnLoadZoneNames = IconFactory.CreateButton(IconFactory.Refresh(), "Обновить список зон", _toolTip,
+            var btnLoadZoneNames = IconFactory.CreateButton(IconFactory.Refresh(), "Обновить список зон (для подсказок в диалогах)", _toolTip,
                 async (s, e) => await RefreshAllZoneCombosAsync());
-            var btnLoadScopes = IconFactory.CreateButton(IconFactory.Folder(), "Показать scopes зоны", _toolTip,
-                async (s, e) => await RefreshScopesAsync());
+            var btnLoadScopes = IconFactory.CreateButton(IconFactory.Folder(), "Обновить дерево серверов/зон/scope'ов с нуля", _toolTip,
+                (s, e) => InitializeServerTree());
 
-            // Выбор зоны из выпадающего списка (клик по варианту, не просто набор текста) -
-            // сразу подгружаем её scopes (а RefreshScopesAsync дальше сам выберет первый scope
-            // и подгрузит его записи).
-            cmbScopeZoneName.SelectedIndexChanged += async (s, e) => await RefreshScopesAsync();
+            // Управление зонами - раньше жило на отдельной вкладке "Зоны", теперь здесь же,
+            // рядом со scope-кнопками (см. GroupBox-разделение ниже в разметке column).
+            txtNewZoneName = Tb(180, "имя зоны, напр. corp.local");
+            cmbZoneType = new ComboBox { Width = 210, DropDownStyle = ComboBoxStyle.DropDownList };
+            cmbZoneType.Items.AddRange(new object[]
+            {
+                "AD-интегрированная (реплика: домен)",
+                "AD-интегрированная (реплика: лес)",
+                "Файловая (.dns на диске)"
+            });
+            cmbZoneType.SelectedIndex = 0;
+
+            var btnAddZone = IconFactory.CreateButton(IconFactory.Add(), "Создать зону...", _toolTip, async (s, e) =>
+            {
+                var (name, type) = AddZoneDialog.Show();
+                if (name == null) return; // отмена
+                txtNewZoneName.Text = name;
+                cmbZoneType.Text = type;
+                await AddZoneAsync();
+            });
+            var btnRemoveZone = IconFactory.CreateButton(IconFactory.Delete(), "Удалить выбранную зону (в дереве слева)", _toolTip,
+                async (s, e) => await RemoveZoneAsync());
+            var btnReloadZone = IconFactory.CreateButton(IconFactory.RefreshZone(), "Перезагрузить выбранную зону (dnscmd /ZoneReload, только локально)", _toolTip,
+                async (s, e) => await ReloadSelectedZoneAsync());
+            var btnExportZones = IconFactory.CreateButton(IconFactory.Export(), "Экспортировать зоны текущего сервера в файл...", _toolTip,
+                (s, e) => ExportCurrentServerZones());
 
             // Поля ниже больше не показываются на панели - их заполняют диалоги перед вызовом
             // уже существующей логики (AddScopeAsync/AddRecordToScopeAsync и т.п.), чтобы не
@@ -981,7 +989,8 @@ namespace DnsToolWinForms
             };
 
             var btnExportRecords = IconFactory.CreateButton(IconFactory.Export(), "Экспорт в файл...", _toolTip,
-                (s, e) => ExportListToFile(lstRecords.Items.Cast<string>(), $"records_{Val(txtRecordScopeName)}_{DateTime.Now:yyyyMMdd_HHmmss}.txt",
+                (s, e) => ExportListToFile(lstRecords.Items.Cast<string>(),
+                    $"records_{Val(txtRecordScopeName)}_{SanitizeForFileName(CurrentServerLabel())}_{DateTime.Now:yyyyMMdd_HHmmss}.txt",
                     $"Экспортировано {DateTime.Now:yyyy-MM-dd HH:mm:ss} с сервера: {CurrentServerLabel()} | Зона: {Val(cmbScopeZoneName)} | Scope: {Val(txtRecordScopeName)}"));
 
             var btnImportRecords = IconFactory.CreateButton(IconFactory.Import(), "Импорт записей из файла...", _toolTip,
@@ -1010,12 +1019,15 @@ namespace DnsToolWinForms
             recordsWrapper.Controls.Add(lstRecords);
             recordsWrapper.Controls.Add(recordsFilterRow);
 
-            var hint = HelpIcon.Create(_toolTip,
+            /*var hint = HelpIcon.Create(_toolTip,
                 "Запись добавляется в scope/папку, которая сейчас выбрана в дереве слева.\n" +
                 "Для записи в корне зоны (SOA/NS/SPF и т.п.) укажи имя \"@\" в диалоге добавления.\n" +
-                "Слева - дерево: scope'ы зоны сверху, внутри каждого - записи, сгруппированные по\n" +
+                "Слева - дерево: сверху серверы (Локальный + любой, к которому успешно\n" +
+                "подключались), внутри каждого - зоны прямого/обратного просмотра, внутри них -\n" +
+                "сами зоны, внутри зоны - scope'ы, внутри scope - записи, сгруппированные по\n" +
                 "составным именам (как в dnsmgmt.msc). Двойной клик по записи справа - изменить;\n" +
-                "правая кнопка мыши - меню (проверить/изменить/удалить).");
+                "правая кнопка мыши - меню (проверить/изменить/удалить).");*/
+            
 
             lblCurrentFolderPath = new Label
             {
@@ -1026,15 +1038,83 @@ namespace DnsToolWinForms
                 Margin = new Padding(4, 6, 4, 2)
             };
 
+            lblZoneSource = new RichTextBox
+            {
+                Text = "Источник: - (выбери зону в дереве слева)",
+                Height = 22,
+                Width = 900,
+                BorderStyle = BorderStyle.None,
+                ReadOnly = true,
+                ScrollBars = RichTextBoxScrollBars.None,
+                BackColor = SystemColors.Control, // сливается с фоном формы, не выглядит как поле ввода
+                ForeColor = Color.DimGray,
+                Font = new Font("Segoe UI", 8.5F),
+                Margin = new Padding(4, 2, 4, 2),
+                TabStop = false
+            };
+
+            // Два отдельных блока с рамкой и подписью - чтобы не путать, какая кнопка относится
+            // к зонам, а какая к scope/записям, раз теперь всё это на одной вкладке с деревом.
+            // AutoSize вместо жёсткого размера - ширина/высота подстраиваются под содержимое,
+            // отступ справа/снизу задаём Padding у самого GroupBox, слева/сверху - через
+            // Location внутренней панели (её НЕ докаем Fill'ом - иначе авторазмер невозможен,
+            // получилась бы циклическая зависимость "размер по содержимому, а содержимое
+            // растянуто на весь размер"). Оба блока стоят РЯДОМ (Row), не друг под другом -
+            // экономит вертикальное место для дерева/списка записей ниже.
+            var zoneManagementRow = new FlowLayoutPanel
+            {
+                FlowDirection = FlowDirection.LeftToRight,
+                WrapContents = false,
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                Location = new Point(8, 20),
+                Margin = new Padding(0)
+            };
+            zoneManagementRow.Controls.AddRange(new Control[]
+            {
+                btnAddZone, btnRemoveZone, btnReloadZone, btnExportZones,
+                new Label { Text = "  ", AutoSize = true },
+                btnLoadZoneNames, btnLoadScopes
+            });
+
+            var zoneManagementGroup = new GroupBox
+            {
+                Text = "Зоны",
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                Padding = new Padding(0, 0, 8, 8) // правый/нижний отступ - симметрично Location(8,20) внутренней панели
+            };
+            zoneManagementGroup.Controls.Add(zoneManagementRow);
+
+            var scopeManagementRow = new FlowLayoutPanel
+            {
+                FlowDirection = FlowDirection.LeftToRight,
+                WrapContents = false,
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                Location = new Point(8, 20),
+                Margin = new Padding(0)
+            };
+            scopeManagementRow.Controls.AddRange(new Control[] { btnAddScope, btnRemoveScope, btnLoadRecords, });
+
+            var scopeManagementGroup = new GroupBox
+            {
+                Text = "Scope",
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                Padding = new Padding(0, 0, 8, 8),
+                Margin = new Padding(12, 0, 0, 0) // небольшой зазор между двумя блоками
+            };
+            scopeManagementGroup.Controls.Add(scopeManagementRow);
+
             var column = Column(
-                Row(new Label { Text = "Зона:", AutoSize = true, Margin = new Padding(4, 8, 4, 2) }, cmbScopeZoneName, btnLoadZoneNames, btnLoadScopes,
-                    new Label { Text = "  ", AutoSize = true }, btnAddScope, btnRemoveScope,
-                    new Label { Text = "  ", AutoSize = true }, btnLoadRecords, hint),
+                Row(zoneManagementGroup, scopeManagementGroup),
+                Row(lblZoneSource),
                 Row(lblCurrentFolderPath)
             );
 
             return WrapTabTwoLists("Scopes и записи", column,
-                "Scopes зоны", treeRecordFolders,
+                "Серверы / зоны / scope'ы", treeRecordFolders,
                 "Записи выбранной папки", recordsWrapper,
                 "ScopesRecordsSplitter");
         }
@@ -1121,27 +1201,119 @@ namespace DnsToolWinForms
             }
         }
 
-        private async Task RefreshScopesAsync()
+        /// <summary>
+        /// Полностью пересобирает дерево с нуля: только локальный сервер сверху, заглушкой
+        /// (ничего не подгружает сам по себе - ленивая подгрузка сработает при первом клике).
+        /// </summary>
+        private void InitializeServerTree()
         {
-            var zoneName = Val(cmbScopeZoneName);
-            if (string.IsNullOrEmpty(zoneName)) { AppendLog("Укажи имя зоны."); return; }
-
-            var parameters = new Dictionary<string, object> { ["ZoneName"] = zoneName };
-            AppendLog($"Загружаю scopes зоны '{zoneName}'...");
-            var (results, log) = await Task.Run(() => DnsHelper.Invoke("Get-DnsServerZoneScope", parameters));
-            AppendLog(log);
-
-            var scopeNames = DnsHelper.GetStringProperty(results, "ZoneScope");
-            if (scopeNames.Count == 0) scopeNames = DnsHelper.GetStringProperty(results, "Name");
-
             treeRecordFolders.Nodes.Clear();
+            _loadedServerTreeNodes.Clear();
+            _loadedZoneTreeNodes.Clear();
+            _loadedScopeTreeNodes.Clear();
             _folderToTreeNode.Clear();
             _folderRootToScopeName.Clear();
-            _loadedScopeTreeNodes.Clear();
             _currentFolderNode = null;
             lstRecords.Items.Clear();
             _displayedRecords.Clear();
             _displayedFolders.Clear();
+
+            AddServerRootIfMissing(""); // локальный сервер всегда первым
+        }
+
+        /// <summary>Находит узел-сервер по имени, а если его ещё нет в дереве - создаёт (с заглушкой внутри, ленивая подгрузка).</summary>
+        private TreeNode AddServerRootIfMissing(string serverName)
+        {
+            var normalized = (serverName ?? "").Trim();
+            foreach (TreeNode existing in treeRecordFolders.Nodes)
+            {
+                if (existing.Tag is ServerNodeMarker m && string.Equals(m.ServerName ?? "", normalized, StringComparison.OrdinalIgnoreCase))
+                    return existing;
+            }
+
+            var label = string.IsNullOrEmpty(normalized) ? "Локальный" : normalized;
+            var node = new TreeNode(label)
+            {
+                Tag = new ServerNodeMarker { ServerName = normalized },
+                BackColor = Color.RoyalBlue,
+                ForeColor = Color.White,
+                NodeFont = new Font(treeRecordFolders.Font, FontStyle.Bold)
+            };
+            node.Nodes.Add(new TreeNode("...")); // заглушка для стрелки разворачивания
+            treeRecordFolders.Nodes.Add(node);
+            return node;
+        }
+
+        /// <summary>
+        /// Переключает панель "Целевой DNS-сервер" сверху на указанный сервер (пусто = локальный) -
+        /// используется навигацией по дереву, чтобы верхняя панель всегда отражала, с каким
+        /// сервером сейчас реально работает дерево. Переиспользует уже существующие обработчики
+        /// CheckedChanged/TextChanged - они сами обновят DnsHelper.ComputerName по цепочке.
+        /// </summary>
+        private void SetCurrentServerContext(string serverName)
+        {
+            if (string.IsNullOrEmpty(serverName))
+            {
+                chkLocalServer.Checked = true;
+            }
+            else
+            {
+                chkLocalServer.Checked = false;
+                cmbTargetServer.Text = serverName;
+            }
+        }
+
+        /// <summary>Ленивая подгрузка: зоны конкретного узла-сервера (вызывается при первом выборе/раскрытии).</summary>
+        private async Task LoadServerZonesIntoTreeAsync(TreeNode serverNode, string serverName)
+        {
+            SetCurrentServerContext(serverName);
+
+            var label = string.IsNullOrEmpty(serverName) ? "локальный" : serverName;
+            AppendLog($"Загружаю зоны сервера '{label}'...");
+            var (results, log) = await Task.Run(() => DnsHelper.Invoke("Get-DnsServerZone"));
+            AppendLog(log);
+
+            serverNode.Nodes.Clear();
+            _loadedServerTreeNodes.Add(serverNode);
+            if (!WasSuccess(log)) return; // причина уже понятно объяснена в логе (не DNS-сервер / нет прав / WinRM и т.п.)
+
+            // Группировка прямая/обратная - чисто по имени уже загруженных зон (обратные всегда
+            // заканчиваются на .in-addr.arpa/.ip6.arpa), без отдельного обращения к серверу.
+            var forwardCategory = new TreeNode("Зоны прямого просмотра") { Tag = new ZoneCategoryMarker { ServerName = serverName, IsReverse = false } };
+            var reverseCategory = new TreeNode("Зоны обратного просмотра") { Tag = new ZoneCategoryMarker { ServerName = serverName, IsReverse = true } };
+            serverNode.Nodes.Add(forwardCategory);
+            serverNode.Nodes.Add(reverseCategory);
+
+            var names = DnsHelper.GetStringProperty(results, "ZoneName");
+            foreach (var zoneName in names.OrderBy(n => n, StringComparer.OrdinalIgnoreCase))
+            {
+                var isReverse = zoneName.EndsWith(".in-addr.arpa", StringComparison.OrdinalIgnoreCase) ||
+                                 zoneName.EndsWith(".ip6.arpa", StringComparison.OrdinalIgnoreCase);
+                var category = isReverse ? reverseCategory : forwardCategory;
+
+                var zoneNode = new TreeNode(zoneName) { Tag = new ZoneNodeMarker { ServerName = serverName, ZoneName = zoneName } };
+                zoneNode.Nodes.Add(new TreeNode("...")); // заглушка
+                category.Nodes.Add(zoneNode);
+            }
+        }
+
+        /// <summary>Ленивая подгрузка: scope'ы конкретного узла-зоны (вызывается при первом выборе/раскрытии).</summary>
+        private async Task LoadZoneScopesIntoTreeAsync(TreeNode zoneNode, string serverName, string zoneName)
+        {
+            SetCurrentServerContext(serverName);
+            cmbScopeZoneName.Text = zoneName; // держим скрытое поле в синхроне - его читают AddScopeAsync/AddZoneDialog/AddScopeDialog и т.п.
+
+            AppendLog($"Загружаю scopes зоны '{zoneName}'...");
+            var parameters = new Dictionary<string, object> { ["ZoneName"] = zoneName };
+            var (results, log) = await Task.Run(() => DnsHelper.Invoke("Get-DnsServerZoneScope", parameters));
+            AppendLog(log);
+
+            zoneNode.Nodes.Clear();
+            _loadedZoneTreeNodes.Add(zoneNode);
+            if (!WasSuccess(log)) return; // например forwarder-зона (WIN32 9603) - понятное сообщение уже в логе
+
+            var scopeNames = DnsHelper.GetStringProperty(results, "ZoneScope");
+            if (scopeNames.Count == 0) scopeNames = DnsHelper.GetStringProperty(results, "Name");
 
             // Scope не подгружается сразу целиком - только когда реально понадобится (клик/раскрытие).
             // Некоторые scope содержат сотни записей, незачем тянуть все разом, если смотрят один.
@@ -1149,17 +1321,55 @@ namespace DnsToolWinForms
             {
                 var scopeNode = new TreeNode(name) { Tag = name };
                 scopeNode.Nodes.Add(new TreeNode("...")); // заглушка - только чтобы была стрелка разворачивания
-                treeRecordFolders.Nodes.Add(scopeNode);
+                zoneNode.Nodes.Add(scopeNode);
             }
+        }
 
-            // Сразу подгружаем и показываем первый scope - не нужно кликать вручную,
-            // чтобы увидеть содержимое хотя бы одного scope сразу после выбора зоны.
-            if (treeRecordFolders.Nodes.Count > 0)
+        /// <summary>Ищет узел-зону конкретного сервера в уже построенном дереве (через категорию прямых/обратных - без обращения к серверу).</summary>
+        private TreeNode FindZoneNode(string serverName, string zoneName)
+        {
+            var normalizedServer = (serverName ?? "").Trim();
+            foreach (TreeNode serverNode in treeRecordFolders.Nodes)
             {
-                var first = treeRecordFolders.Nodes[0];
-                await LoadScopeIntoTreeAsync(first, (string)first.Tag);
-                first.Expand();
+                if (!(serverNode.Tag is ServerNodeMarker sm) || !string.Equals(sm.ServerName ?? "", normalizedServer, StringComparison.OrdinalIgnoreCase))
+                    continue;
+                foreach (TreeNode categoryNode in serverNode.Nodes)
+                {
+                    foreach (TreeNode zoneNode in categoryNode.Nodes)
+                    {
+                        if (zoneNode.Tag is ZoneNodeMarker zm && string.Equals(zm.ZoneName, zoneName, StringComparison.OrdinalIgnoreCase))
+                            return zoneNode;
+                    }
+                }
             }
+            return null;
+        }
+
+        /// <summary>Ищет узел-scope конкретной зоны конкретного сервера в уже построенном дереве (без обращения к серверу).</summary>
+        private TreeNode FindScopeNode(string serverName, string zoneName, string scopeName)
+        {
+            var zoneNode = FindZoneNode(serverName, zoneName);
+            if (zoneNode == null) return null;
+            foreach (TreeNode scopeNode in zoneNode.Nodes)
+            {
+                if (string.Equals(scopeNode.Text, scopeName, StringComparison.OrdinalIgnoreCase))
+                    return scopeNode;
+            }
+            return null;
+        }
+
+        /// <summary>Перезагружает scope'ы ТЕКУЩЕЙ (уже открытой в дереве) зоны - после создания/удаления scope.</summary>
+        private async Task RefreshCurrentZoneScopesAsync()
+        {
+            var zoneName = Val(cmbScopeZoneName);
+            if (string.IsNullOrEmpty(zoneName)) return;
+
+            var serverName = DnsHelper.ComputerName;
+            var zoneNode = FindZoneNode(serverName, zoneName);
+            if (zoneNode == null) return; // зона ещё не открывалась в дереве в этой сессии - обновлять нечего
+
+            await LoadZoneScopesIntoTreeAsync(zoneNode, serverName, zoneName);
+            zoneNode.Expand();
         }
 
         private async Task AddScopeAsync()
@@ -1177,7 +1387,7 @@ namespace DnsToolWinForms
             var (_, log) = await Task.Run(() => DnsHelper.Invoke("Add-DnsServerZoneScope", parameters));
             AppendLog(log);
             FileLogger.LogChange("SCOPE ADD", zoneName, $"Scope={scopeName}", WasSuccess(log), log);
-            await RefreshScopesAsync();
+            await RefreshCurrentZoneScopesAsync();
         }
 
         private async Task RemoveScopeAsync()
@@ -1203,7 +1413,7 @@ namespace DnsToolWinForms
             var (_, log) = await Task.Run(() => DnsHelper.Invoke("Remove-DnsServerZoneScope", parameters));
             AppendLog(log);
             FileLogger.LogChange("SCOPE DELETE", zoneName, $"Scope={scopeName}", WasSuccess(log), log);
-            await RefreshScopesAsync();
+            await RefreshCurrentZoneScopesAsync();
         }
 
         /// <summary>
@@ -1294,6 +1504,8 @@ namespace DnsToolWinForms
             AppendLog($"Добавляю {type}-запись '{recordName}' -> {value} в scope '{scopeName}'...");
             var (_, log) = await Task.Run(() => DnsHelper.Invoke(cmdlet, parameters));
             AppendLog(log);
+            if (WasSuccess(log))
+                AppendLog($"OK: запись \"{recordName}\" ({type}) {value} добавлена в зону \"{zoneName}\", scope \"{scopeName}\".");
             FileLogger.LogChange("RECORD ADD", zoneName, $"Scope={scopeName} {type} {recordName} -> {value}", WasSuccess(log), log);
             await RefreshRecordsAsync();
         }
@@ -1337,24 +1549,32 @@ namespace DnsToolWinForms
             var parentSuffix = GetFolderPathSuffix(currentNode);
             var parentHint = string.IsNullOrEmpty(parentSuffix) ? $"корень scope '{scopeName}'" : parentSuffix;
 
-            var (folderName, ip) = CreateSubfolderDialog.Show(parentHint);
+            var (folderName, ip, asWildcard) = CreateSubfolderDialog.Show(parentHint);
             if (string.IsNullOrEmpty(folderName) || string.IsNullOrEmpty(ip)) return; // отмена
 
-            var wildcardName = string.IsNullOrEmpty(parentSuffix) ? $"*.{folderName}" : $"*.{folderName}.{parentSuffix}";
+            // Буквально как в оснастке ("Новый домен" с пустым именем записи = "(как папка
+            // верхнего уровня)") - запись называется РОВНО как сама папка, без "*". У нас это
+            // НЕ покажется папкой в дереве, пока внутри неё нет ещё одной вложенной записи -
+            // предупреждение об этом уже показано в самом диалоге при выборе такого варианта.
+            var recordName = asWildcard
+                ? (string.IsNullOrEmpty(parentSuffix) ? $"*.{folderName}" : $"*.{folderName}.{parentSuffix}")
+                : (string.IsNullOrEmpty(parentSuffix) ? folderName : $"{folderName}.{parentSuffix}");
 
-            var (cmdlet, parameters) = BuildAddRecordCommand(zoneName, scopeName, "A", wildcardName, ip, "", "", "");
-            AppendLog($"Создаю папку '{folderName}' - добавляю wildcard-запись '{wildcardName}' -> {ip}...");
+            var (cmdlet, parameters) = BuildAddRecordCommand(zoneName, scopeName, "A", recordName, ip, "", "", "");
+            AppendLog($"Создаю папку '{folderName}' - добавляю запись '{recordName}' -> {ip}...");
             var (_, log) = await Task.Run(() => DnsHelper.Invoke(cmdlet, parameters));
             AppendLog(log);
+            if (WasSuccess(log))
+                AppendLog($"OK: запись \"{recordName}\" (A) {ip} добавлена в зону \"{zoneName}\", scope \"{scopeName}\" (создание папки \"{folderName}\").");
             FileLogger.LogChange("RECORD ADD", zoneName,
-                $"Scope={scopeName} A {wildcardName} -> {ip} (создание папки '{folderName}')", WasSuccess(log), log);
+                $"Scope={scopeName} A {recordName} -> {ip} (создание папки '{folderName}')", WasSuccess(log), log);
 
             await RefreshRecordsAsync();
         }
 
         /// <summary>
         /// Импорт записей из файла, ранее сохранённого через "Экспорт в файл...". Строки-папки
-        /// (вида "📁 имя  ПАПКА  N запис.") распознаются и НЕ импортируются как записи - вместо
+        /// (вида "[FLDR] имя  N запис.") распознаются и НЕ импортируются как записи - вместо
         /// этого пользователю предлагается создать соответствующий субдомен через wildcard
         /// (см. CreateSubfolderAsync выше - та же идея, здесь просто автоматизирован массовый
         /// разбор файла). Строки-заголовки экспорта (начинаются с "#") пропускаются как метаданные.
@@ -1394,13 +1614,14 @@ namespace DnsToolWinForms
                 if (string.IsNullOrWhiteSpace(line)) continue;
                 if (line.TrimStart().StartsWith("#")) continue; // строка-заголовок экспорта, не запись
 
-                if (line.Contains("📁"))
+                if (line.TrimStart().StartsWith("[FLDR]", StringComparison.OrdinalIgnoreCase))
                 {
-                    // "📁 pro32connect              ПАПКА  4 запис." - вырезаем имя между
-                    // значком и словом "ПАПКА", без привязки к точным позициям колонок.
-                    var afterEmoji = line.Substring(line.IndexOf('📁') + 1).Trim();
-                    var idx = afterEmoji.IndexOf("ПАПКА", StringComparison.Ordinal);
-                    var folderName = idx > 0 ? afterEmoji.Substring(0, idx).Trim() : afterEmoji.Trim();
+                    // "[FLDR] pro32connect              4 запис." - имя лежит между маркером
+                    // и хвостом "N запис.", вырезаем тем же разделителем "2+ пробела", что и
+                    // у обычных записей ниже - обычный ASCII, никаких суррогатных пар.
+                    var afterMarker = line.Substring(line.IndexOf("[FLDR]", StringComparison.OrdinalIgnoreCase) + "[FLDR]".Length).Trim();
+                    var folderParts = System.Text.RegularExpressions.Regex.Split(afterMarker, @"\s{2,}");
+                    var folderName = folderParts.Length > 0 ? folderParts[0].Trim() : "";
                     if (!string.IsNullOrEmpty(folderName) && !detectedFolders.Contains(folderName))
                         detectedFolders.Add(folderName);
                     continue; // папка - не настоящая запись, при импорте самих записей игнорируем
@@ -1454,7 +1675,11 @@ namespace DnsToolWinForms
             }
 
             // Актуальный список записей ЭТОГО scope - нужен для проверки конфликтов (имя+тип)
-            // и для получения "сырого" объекта существующей записи при перезаписи.
+            // и для получения "сырого" объекта существующей записи при перезаписи. Складываем
+            // в словарь по ключу "имя|тип" - и обновляем ПО ХОДУ ИМПОРТА (см. ниже), а не
+            // только один раз в начале: если в самом файле есть повторяющаяся запись, второй
+            // дубль должен распознаться как конфликт с тем, что мы только что сами добавили
+            // в этом же прогоне, а не улететь в DNS Server и получить WIN32 9709/9603 напрямую.
             var existingParams = new Dictionary<string, object> { ["ZoneName"] = zoneName, ["ZoneScope"] = scopeName };
             var (existingResults, existingLog) = await Task.Run(() => DnsHelper.Invoke("Get-DnsServerResourceRecord", existingParams));
             if (!WasSuccess(existingLog))
@@ -1462,6 +1687,13 @@ namespace DnsToolWinForms
                 AppendLog("ОШИБКА: не удалось получить текущие записи scope для проверки конфликтов - импорт остановлен.");
                 AppendLog(existingLog);
                 return;
+            }
+
+            var knownRecords = new Dictionary<string, PSObject>(StringComparer.OrdinalIgnoreCase);
+            foreach (var r in existingResults)
+            {
+                var key = $"{r.Properties["HostName"]?.Value}|{r.Properties["RecordType"]?.Value}";
+                knownRecords[key] = r; // при дублях в самой зоне (round-robin A и т.п.) остаётся последний - для проверки "есть ли вообще конфликт" этого достаточно
             }
 
             var bulkModeActive = false;
@@ -1476,56 +1708,11 @@ namespace DnsToolWinForms
                     continue;
                 }
 
-                var existingMatch = existingResults.FirstOrDefault(r =>
-                    string.Equals(r.Properties["HostName"]?.Value?.ToString(), rec.Name, StringComparison.OrdinalIgnoreCase) &&
-                    string.Equals(r.Properties["RecordType"]?.Value?.ToString(), rec.Type, StringComparison.OrdinalIgnoreCase));
-                var isConflict = existingMatch != null;
-
-                if (isConflict)
-                {
-                    ImportConflictChoice choice;
-                    if (bulkModeActive)
-                    {
-                        choice = bulkChoice;
-                    }
-                    else
-                    {
-                        choice = ImportConflictDialog.Show(rec.Name, rec.Type);
-                        if (choice == ImportConflictChoice.OverwriteAll || choice == ImportConflictChoice.SkipAll)
-                        {
-                            bulkModeActive = true;
-                            bulkChoice = choice == ImportConflictChoice.OverwriteAll ? ImportConflictChoice.Overwrite : ImportConflictChoice.Skip;
-                            choice = bulkChoice;
-                        }
-                    }
-
-                    if (choice == ImportConflictChoice.Skip)
-                    {
-                        skipped++;
-                        continue;
-                    }
-
-                    // Перезапись - сначала удаляем старую запись целиком через -InputObject
-                    // (тот же паттерн, что и в RemoveRecordAsync), потом добавляем новую ниже.
-                    var delParams = new Dictionary<string, object>
-                    {
-                        ["ZoneName"] = zoneName,
-                        ["ZoneScope"] = scopeName,
-                        ["InputObject"] = existingMatch,
-                        ["Force"] = true
-                    };
-                    var (_, delLog) = await Task.Run(() => DnsHelper.Invoke("Remove-DnsServerResourceRecord", delParams));
-                    if (!WasSuccess(delLog))
-                    {
-                        AppendLog($"ОШИБКА при удалении старой записи '{rec.Name}' перед перезаписью: {delLog}");
-                        failed++;
-                        continue;
-                    }
-                }
-
-                // SRV/MX - значение в файле составное (см. DescribeRecordData), разбираем обратно.
+                // SRV/MX - значение в файле составное (см. DescribeRecordData), разбираем обратно
+                // СРАЗУ, до проверки конфликта - и чтобы было что показать в сравнении, и чтобы
+                // заведомо нераспарсенный SRV не тратил диалог конфликта впустую.
                 var value = rec.Value;
-                var priority = "10", weight = "10", port = "443";
+                string priority = "10", weight = "10", port = "443";
 
                 if (rec.Type.Equals("SRV", StringComparison.OrdinalIgnoreCase))
                 {
@@ -1557,14 +1744,74 @@ namespace DnsToolWinForms
                     // используем значение как есть, приоритет по умолчанию (10).
                 }
 
+                var recordKey = $"{rec.Name}|{rec.Type}";
+                var hasExisting = knownRecords.TryGetValue(recordKey, out var existingMatch);
+
+                if (hasExisting)
+                {
+                    // Реальное значение существующей записи - чтобы в диалоге конфликта было
+                    // видно, это полный дубль или отличается IP/имя/что угодно другое.
+                    var existingValueText = DnsHelper.DescribeRecordData(existingMatch.Properties["RecordData"]?.Value, rec.Type);
+
+                    ImportConflictChoice choice;
+                    if (bulkModeActive)
+                    {
+                        choice = bulkChoice;
+                    }
+                    else
+                    {
+                        choice = ImportConflictDialog.Show(rec.Name, rec.Type, existingValueText, value);
+                        if (choice == ImportConflictChoice.OverwriteAll || choice == ImportConflictChoice.SkipAll)
+                        {
+                            bulkModeActive = true;
+                            bulkChoice = choice == ImportConflictChoice.OverwriteAll ? ImportConflictChoice.Overwrite : ImportConflictChoice.Skip;
+                            choice = bulkChoice;
+                        }
+                    }
+
+                    if (choice == ImportConflictChoice.Skip)
+                    {
+                        skipped++;
+                        continue;
+                    }
+
+                    // Перезапись - сначала удаляем старую запись целиком через -InputObject
+                    // (тот же паттерн, что и в RemoveRecordAsync), потом добавляем новую ниже.
+                    var delParams = new Dictionary<string, object>
+                    {
+                        ["ZoneName"] = zoneName,
+                        ["ZoneScope"] = scopeName,
+                        ["InputObject"] = existingMatch,
+                        ["Force"] = true
+                    };
+                    var (_, delLog) = await Task.Run(() => DnsHelper.Invoke("Remove-DnsServerResourceRecord", delParams));
+                    if (!WasSuccess(delLog))
+                    {
+                        AppendLog($"ОШИБКА при удалении старой записи '{rec.Name}' перед перезаписью: {delLog}");
+                        failed++;
+                        continue;
+                    }
+                    knownRecords.Remove(recordKey); // старой больше нет - если добавление ниже не удастся, конфликта на неё уже не будет
+                }
+
                 var (addCmdlet, addParams) = BuildAddRecordCommand(zoneName, scopeName, rec.Type, rec.Name, value, priority, weight, port);
                 var (_, addLog) = await Task.Run(() => DnsHelper.Invoke(addCmdlet, addParams));
 
                 if (WasSuccess(addLog))
                 {
-                    if (isConflict) overwritten++; else added++;
+                    if (hasExisting) overwritten++; else added++;
+                    AppendLog($"OK: запись \"{rec.Name}\" ({rec.Type}) {value} добавлена в зону \"{zoneName}\", scope \"{scopeName}\"" +
+                              (hasExisting ? " (перезапись)." : " (импорт)."));
                     FileLogger.LogChange("RECORD ADD", zoneName,
-                        $"Scope={scopeName} {rec.Type} {rec.Name} -> {value} (импорт{(isConflict ? ", перезапись" : "")})", true, null);
+                        $"Scope={scopeName} {rec.Type} {rec.Name} -> {value} (импорт{(hasExisting ? ", перезапись" : "")})", true, null);
+
+                    // Точечный довыгруз реального объекта только что добавленной записи -
+                    // если в файле есть ЕЩЁ ОДНА строка с тем же именем+типом (дубль внутри
+                    // самого файла), она должна распознаться как конфликт с этой, а не улететь
+                    // в DNS Server напрямую и вернуть WIN32 9709/аналогичный "уже существует".
+                    var refetchParams = new Dictionary<string, object> { ["ZoneName"] = zoneName, ["ZoneScope"] = scopeName, ["Name"] = rec.Name, ["RRType"] = rec.Type };
+                    var (refetched, _) = await Task.Run(() => DnsHelper.Invoke("Get-DnsServerResourceRecord", refetchParams));
+                    if (refetched.Count > 0) knownRecords[recordKey] = refetched[0];
                 }
                 else
                 {
@@ -1758,6 +2005,8 @@ namespace DnsToolWinForms
                 AppendLog(reloadResult);
 
                 var success = reloadResult.StartsWith("OK");
+                if (success)
+                    AppendLog($"OK: запись \"{recordName}\" ({type}) {value} добавлена в зону \"{zoneName}\", scope \"{scopeName}\" (файловый режим).");
                 FileLogger.LogChange("RECORD ADD (файл)", zoneName,
                     $"Scope={scopeName} {type} {recordName} -> {value} | файл={filePath}", success, success ? null : reloadResult);
             }
@@ -1818,23 +2067,17 @@ namespace DnsToolWinForms
             var scopeName = Val(txtRecordScopeName);
             if (string.IsNullOrEmpty(zoneName) || string.IsNullOrEmpty(scopeName))
             {
-                AppendLog("Укажи зону (поле 'Зона' сверху) и scope (поле 'Записи scope').");
+                AppendLog("Перейди к нужному scope в дереве слева (сервер -> зона -> scope).");
                 return;
             }
 
-            // Ищем узел этого scope среди уже показанных в дереве - обновляем именно его ветку,
-            // остальные scope'ы (если уже подгружены) не трогаем.
-            TreeNode scopeNode = null;
-            foreach (TreeNode n in treeRecordFolders.Nodes)
-            {
-                if (string.Equals(n.Text, scopeName, StringComparison.OrdinalIgnoreCase)) { scopeNode = n; break; }
-            }
+            // Ищем узел этого scope в дереве (сервер -> зона -> scope) - обновляем именно его
+            // ветку, остальные узлы (если уже подгружены) не трогаем.
+            var scopeNode = FindScopeNode(DnsHelper.ComputerName, zoneName, scopeName);
 
             if (scopeNode == null)
             {
-                // Дерево ещё не строилось для текущей зоны (например, поле scope заполнили
-                // руками, не через дерево) - обновляем список scope'ов целиком.
-                await RefreshScopesAsync();
+                AppendLog("Не нашёл этот scope в уже построенном дереве - перейди к нему заново через дерево слева.");
                 return;
             }
 
@@ -1972,8 +2215,11 @@ namespace DnsToolWinForms
                 if (child.Children.Count > 0)
                 {
                     // Настоящая папка - есть что-то вложено ещё глубже.
+                    // [FLDR] вместо эмодзи-папки: обычный ASCII-текст, не суррогатная пара -
+                    // не ломает char-литералы/посимвольный разбор при парсинге на импорте,
+                    // и не зависит от кодировки, в которой файл потом откроют в блокноте.
                     var count = CountRecordsRecursive(child);
-                    var display = $"📁 {child.Label,-26} ПАПКА  {count} запис.";
+                    var display = $"[FLDR] {child.Label,-26} {count} запис.";
                     rows.Add((display, child.Label, "ПАПКА", count.ToString(), true, child, null));
                 }
                 else
@@ -2032,49 +2278,74 @@ namespace DnsToolWinForms
         {
             var zoneName = Val(cmbScopeZoneName);
             var scopeName = Val(txtRecordScopeName);
-            var index = lstRecords.SelectedIndex;
 
             if (string.IsNullOrEmpty(zoneName) || string.IsNullOrEmpty(scopeName))
             {
                 AppendLog("Укажи зону и scope.");
                 return;
             }
-            if (index < 0 || index >= _displayedRecords.Count)
+
+            // Собираем ВСЕ выделенные строки, которые реально являются записями (не папками) -
+            // папки среди выделенного просто пропускаем молча, а не срываем всю операцию.
+            var indices = lstRecords.SelectedIndices.Cast<int>()
+                .Where(i => i >= 0 && i < _displayedRecords.Count && _displayedRecords[i] != null)
+                .ToList();
+
+            if (indices.Count == 0)
             {
-                AppendLog("Выбери запись в правом списке (и сначала нажми 'Показать записи в scope', если список пуст).");
+                AppendLog("Выбери одну или несколько записей в правом списке (папки при удалении игнорируются).");
                 return;
             }
-            if (_displayedRecords[index] == null)
-            {
-                AppendLog("Это папка (группировка по имени), а не запись - удалить её напрямую нельзя, зайди внутрь и работай с записями.");
+
+            var records = indices.Select(i => _displayedRecords[i]).ToList();
+
+            var confirmText = records.Count == 1
+                ? $"Удалить запись '{records[0].Properties["HostName"]?.Value}' " +
+                  $"({records[0].Properties["RecordType"]?.Value}) из scope '{scopeName}'?"
+                : $"Удалить {records.Count} записей из scope '{scopeName}'?\n\n" +
+                  string.Join("\n", records.Take(10).Select(r => $"  {r.Properties["HostName"]?.Value} ({r.Properties["RecordType"]?.Value})")) +
+                  (records.Count > 10 ? $"\n  ...и ещё {records.Count - 10}" : "");
+
+            if (MessageBox.Show(confirmText, "Подтверждение", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes)
                 return;
-            }
+
+            int deleted = 0, failed = 0;
 
             // Берём "сырой" объект записи целиком из последнего Get-DnsServerResourceRecord
             // и передаём его в -InputObject - это официальный паттерн удаления конкретной
             // записи (эквивалент "Get-DnsServerResourceRecord ... | Remove-DnsServerResourceRecord").
             // Передавать Name/RRType/RecordData по отдельности ненадёжно: RecordData в объекте
             // записи - это вложенная структура, а не то, что ожидает параметр -RecordData.
-            var record = _displayedRecords[index];
-            var hostName = record.Properties["HostName"]?.Value?.ToString();
-            var recordType = record.Properties["RecordType"]?.Value?.ToString();
-
-            if (MessageBox.Show($"Удалить запись '{hostName}' ({recordType}) из scope '{scopeName}'?", "Подтверждение",
-                    MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes)
-                return;
-
-            var parameters = new Dictionary<string, object>
+            foreach (var record in records)
             {
-                ["ZoneName"] = zoneName,
-                ["ZoneScope"] = scopeName,
-                ["InputObject"] = record,
-                ["Force"] = true
-            };
+                var hostName = record.Properties["HostName"]?.Value?.ToString();
+                var recordType = record.Properties["RecordType"]?.Value?.ToString();
+                var value = DnsHelper.DescribeRecordData(record.Properties["RecordData"]?.Value, recordType);
 
-            AppendLog($"Удаляю запись '{hostName}' ({recordType}) из scope '{scopeName}'...");
-            var (_, delLog) = await Task.Run(() => DnsHelper.Invoke("Remove-DnsServerResourceRecord", parameters));
-            AppendLog(delLog);
-            FileLogger.LogChange("RECORD DELETE", zoneName, $"Scope={scopeName} {recordType} {hostName}", WasSuccess(delLog), delLog);
+                var parameters = new Dictionary<string, object>
+                {
+                    ["ZoneName"] = zoneName,
+                    ["ZoneScope"] = scopeName,
+                    ["InputObject"] = record,
+                    ["Force"] = true
+                };
+
+                var (_, delLog) = await Task.Run(() => DnsHelper.Invoke("Remove-DnsServerResourceRecord", parameters));
+
+                if (WasSuccess(delLog))
+                {
+                    deleted++;
+                    AppendLog($"OK: запись \"{hostName}\" ({recordType}) {value} удалена из зоны \"{zoneName}\", scope \"{scopeName}\".");
+                }
+                else
+                {
+                    failed++;
+                    AppendLog($"ОШИБКА при удалении \"{hostName}\" ({recordType}): {delLog}");
+                }
+                FileLogger.LogChange("RECORD DELETE", zoneName, $"Scope={scopeName} {recordType} {hostName}", WasSuccess(delLog), delLog);
+            }
+
+            if (records.Count > 1) AppendLog($"Удаление завершено: успешно {deleted}, ошибок {failed}.");
             await RefreshRecordsAsync();
         }
 
@@ -2438,11 +2709,6 @@ namespace DnsToolWinForms
             var (results, log) = await Task.Run(() => DnsHelper.Invoke("Get-DnsServerQueryResolutionPolicy", parameters));
             AppendLog(log);
 
-            // Политика хранит только ИМЕНА подсетей (net_100, Old_DNS_redirect13...) -
-            // сами по себе они ничего не говорят про реальный диапазон IP. Подтягиваем
-            // список подсетей отдельно и резолвим имя -> CIDR, чтобы показать сразу обе вещи.
-            var subnetMap = await Task.Run(() => LoadSubnetMap());
-
             lstPolicies.Items.Clear();
             _lastPolicies.Clear();
             rtbPolicyDetails.Clear();
@@ -2454,7 +2720,7 @@ namespace DnsToolWinForms
                 // и "Content" (scope), а не "ClientSubnet"/"ZoneScope" (это имена параметров у
                 // Add-DnsServerQueryResolutionPolicy, но в возвращаемом объекте они называются иначе).
                 var subnetRaw = DnsHelper.FlattenPropertyValue(p.Properties["Criteria"]?.Value);
-                var subnetDisplay = ResolveSubnetNames(subnetRaw, subnetMap);
+                var subnetDisplay = ResolveSubnetNames(subnetRaw);
                 var scope = DnsHelper.FlattenPropertyValue(p.Properties["Content"]?.Value);
 
                 lstPolicies.Items.Add(name);
@@ -2496,27 +2762,15 @@ namespace DnsToolWinForms
             Add("  " + (string.IsNullOrEmpty(info.Scope) ? "(не задано)" : info.Scope), Color.RoyalBlue);
         }
 
-        /// <summary>Имя подсети -> её реальный CIDR (10.0.1.0/24 и т.п.), берётся из Get-DnsServerClientSubnet.</summary>
-        private static Dictionary<string, string> LoadSubnetMap()
-        {
-            var (results, _) = DnsHelper.Invoke("Get-DnsServerClientSubnet");
-            var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var s in results)
-            {
-                var subnetName = s.Properties["Name"]?.Value?.ToString();
-                if (string.IsNullOrEmpty(subnetName)) continue;
-                var cidr = DnsHelper.FlattenPropertyValue(s.Properties["IPv4Subnet"]?.Value);
-                if (string.IsNullOrEmpty(cidr)) cidr = DnsHelper.FlattenPropertyValue(s.Properties["IPv6Subnet"]?.Value);
-                map[subnetName] = cidr ?? "";
-            }
-            return map;
-        }
-
         /// <summary>
         /// ClientSubnet у политики выглядит как "EQ,net_100,Old_DNS_redirect13" - отсекаем
-        /// оператор (EQ/NE) и подставляем реальный CIDR рядом с каждым именем подсети.
+        /// оператор (EQ/NE), оставляем ЧИСТЫЕ имена подсетей без CIDR в скобках. Раньше здесь
+        /// рядом с именем подставлялся реальный CIDR - выглядело удобно для чтения, но именно
+        /// это "(10.0.1.0/24)" в скобках НЕ часть имени подсети, и при копипасте в поле
+        /// "Подсети" диалога создания политики ловилась ошибка ("такой подсети не существует").
+        /// CIDR теперь показывается только на вкладке "Подсети", где он и должен быть виден.
         /// </summary>
-        private static string ResolveSubnetNames(string rawClientSubnet, Dictionary<string, string> subnetMap)
+        private static string ResolveSubnetNames(string rawClientSubnet)
         {
             if (string.IsNullOrEmpty(rawClientSubnet)) return "";
 
@@ -2526,12 +2780,7 @@ namespace DnsToolWinForms
                             !t.Equals("EQ", StringComparison.OrdinalIgnoreCase) &&
                             !t.Equals("NE", StringComparison.OrdinalIgnoreCase));
 
-            var parts = tokens.Select(n =>
-                subnetMap.TryGetValue(n, out var cidr) && !string.IsNullOrEmpty(cidr)
-                    ? $"{n} ({cidr})"
-                    : n);
-
-            return string.Join(", ", parts);
+            return string.Join(", ", tokens);
         }
 
         private async Task AddPolicyAsync()
@@ -2638,6 +2887,15 @@ namespace DnsToolWinForms
         /// <summary>Имя сервера, с которого реально сделан запрос - для заголовка экспорта. Пусто в DnsHelper.ComputerName = локальная машина.</summary>
         private static string CurrentServerLabel() =>
             string.IsNullOrWhiteSpace(DnsHelper.ComputerName) ? Environment.MachineName : DnsHelper.ComputerName;
+
+        /// <summary>Убирает из строки символы, недопустимые в имени файла (сервер может быть указан как угодно, но в имя файла попадёт как есть).</summary>
+        private static string SanitizeForFileName(string value)
+        {
+            if (string.IsNullOrEmpty(value)) return value;
+            foreach (var c in Path.GetInvalidFileNameChars())
+                value = value.Replace(c, '_');
+            return value;
+        }
 
         /// <summary>
         /// Экспортирует список строк (то, что сейчас отображено в списке - с учётом

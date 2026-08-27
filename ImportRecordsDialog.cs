@@ -40,7 +40,7 @@ namespace DnsToolWinForms
                 MaximizeBox = false,
                 MinimizeBox = false,
                 ShowInTaskbar = false,
-                ClientSize = new Size(460, 168 + extraForFolders),
+                ClientSize = new Size(500, 168 + extraForFolders),
                 Font = new Font("Segoe UI", 9F),
                 Icon = AppIcon.Current
             };
@@ -51,7 +51,7 @@ namespace DnsToolWinForms
                        (detectedFolders.Count > 0 ? $"\nОбнаружены субдомены (папки): {detectedFolders.Count}" : "\nСубдомены (папки) не обнаружены.") +
                        $"\nИмпорт в: {targetHint}",
                 Location = new Point(16, 12),
-                Size = new Size(428, 56)
+                Size = new Size(468, 56)
             };
 
             var y = 72;
@@ -71,7 +71,7 @@ namespace DnsToolWinForms
                 var scroll = new Panel
                 {
                     Location = new Point(16, y),
-                    Size = new Size(428, foldersAreaHeight),
+                    Size = new Size(468, foldersAreaHeight),
                     AutoScroll = true,
                     BorderStyle = BorderStyle.FixedSingle
                 };
@@ -97,8 +97,10 @@ namespace DnsToolWinForms
             var chkExcludeApex = new CheckBox { Text = "Исключить @-записи (корень зоны)", Location = new Point(16, y), AutoSize = true };
             y += 32;
 
-            var btnCancel = new Button { Text = "Отмена", DialogResult = DialogResult.Cancel, Location = new Point(280, y), Size = new Size(80, 32) };
-            var btnImport = new Button { Text = "Импортировать", DialogResult = DialogResult.OK, Location = new Point(364, y), Size = new Size(110, 32) };
+            // Позиции с запасом от правого края (ClientSize.Width=500) - раньше btnImport
+            // (x=364, ширина 110) реально выходил за границу клиентской области на 14px.
+            var btnImport = new Button { Text = "Импортировать", DialogResult = DialogResult.OK, Location = new Point(374, y), Size = new Size(110, 32) };
+            var btnCancel = new Button { Text = "Отмена", DialogResult = DialogResult.Cancel, Location = new Point(286, y), Size = new Size(80, 32) };
 
             dlg.Controls.Add(lblInfo);
             dlg.Controls.Add(chkExcludeApex);

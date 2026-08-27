@@ -45,18 +45,22 @@ namespace DnsToolWinForms
                 text.IndexOf("0x80070005", StringComparison.OrdinalIgnoreCase) >= 0 ||
                 text.IndexOf("PermissionDenied", StringComparison.Ordinal) >= 0);
 
-        // Активная CimSession с явными кредами (если авторизовались вручную через ServerAuthDialog)
-        // и сервер, для которого она создана. Пока эти два совпадают с текущим ComputerName -
-        // используем именно её вместо -ComputerName (иначе PowerShell снова попробует текущую
-        // Windows-учётку и получит тот же отказ в правах).
-        private static object _activeCimSession;
-        private static string _activeCimSessionComputer;
-        // PowerShell-раннспейс, которым была создана _activeCimSession - держим живым, пока живёт
-        // сама сессия. Раньше он создавался через "using" и уничтожался сразу по выходу из
-        // TryAuthenticate, а New-CimSession, судя по всему, привязывает созданную "живую" сессию
-        // к своему раннспейсу - Dispose() раннспейса утаскивал за собой и саму CimSession,
-        // из-за чего при следующем реальном использовании прилетал ObjectDisposedException.
-        private static PowerShell _activeCimSessionRunspace;
+        /// <summary>Одна закешированная CimSession для конкретного сервера + раннспейс, которым она создана (должен жить, пока жива сессия - см. комментарий ниже).</summary>
+        private class CimSessionEntry
+        {
+            public object Session;
+            public PowerShell Runspace;
+        }
+
+        // Кеш CimSession ПО СЕРВЕРАМ (не одна на всё приложение) - несколько удалённых серверов
+        // могут быть авторизованы одновременно и оставаться живыми весь срок работы приложения,
+        // независимо от того, между какими узлами дерева/вкладками сейчас переключается
+        // пользователь. Раньше здесь было единственное подключение, которое уничтожалось при
+        // любой смене целевого сервера (InvalidateCimSessionIfServerChanged) - что делало
+        // бессмысленной саму идею "не логиниться повторно", если человек работает сразу
+        // с несколькими серверами и переключается между ними.
+        private static readonly Dictionary<string, CimSessionEntry> _cimSessions =
+            new Dictionary<string, CimSessionEntry>(StringComparer.OrdinalIgnoreCase);
 
         /// <summary>
         /// Пробует создать CimSession с явно указанными логином/паролем (New-CimSession -Credential).
@@ -86,7 +90,7 @@ namespace DnsToolWinForms
                 var credential = new PSCredential(username, password);
 
                 // ВАЖНО: без "using" - этот раннспейс должен пережить сам метод, пока жива
-                // созданная им CimSession (см. комментарий у _activeCimSessionRunspace выше).
+                // созданная им CimSession (см. комментарий у CimSessionEntry/_cimSessions выше).
                 // Освобождаем вручную в каждой ветке (ошибка/успех), но НЕ в конце метода.
                 ps = PowerShell.Create();
                 ps.AddCommand("New-CimSession")
@@ -112,10 +116,8 @@ namespace DnsToolWinForms
                     return (false, "New-CimSession не вернул объект сессии");
                 }
 
-                DisposeActiveCimSession(); // закрываем предыдущую (и её раннспейс), если была
-                _activeCimSession = session;
-                _activeCimSessionComputer = computerName;
-                _activeCimSessionRunspace = ps; // держим живым - см. комментарий у поля выше
+                DisposeCimSession(computerName); // закрываем ПРЕЖНЮЮ сессию именно для ЭТОГО сервера, если была - остальные серверы не трогаем
+                _cimSessions[(computerName ?? "").Trim()] = new CimSessionEntry { Session = session, Runspace = ps };
                 return (true, null);
             }
             catch (System.Exception ex)
@@ -159,36 +161,28 @@ namespace DnsToolWinForms
             return null;
         }
 
-        /// <summary>Закрывает и забывает активную CimSession (и её раннспейс), если она есть.</summary>
-        public static void DisposeActiveCimSession()
+        /// <summary>Закрывает и забывает CimSession конкретного сервера (и её раннспейс), если она есть. Остальные серверы не трогает.</summary>
+        public static void DisposeCimSession(string serverName)
         {
-            if (_activeCimSession is IDisposable disposable)
+            var key = (serverName ?? "").Trim();
+            if (!_cimSessions.TryGetValue(key, out var entry)) return;
+
+            if (entry.Session is IDisposable disposable)
             {
                 try { disposable.Dispose(); } catch { /* сессия уже могла отвалиться сама - не критично */ }
             }
-            _activeCimSession = null;
-            _activeCimSessionComputer = null;
-
-            if (_activeCimSessionRunspace != null)
+            if (entry.Runspace != null)
             {
-                try { _activeCimSessionRunspace.Dispose(); } catch { /* не критично */ }
-                _activeCimSessionRunspace = null;
+                try { entry.Runspace.Dispose(); } catch { /* не критично */ }
             }
+            _cimSessions.Remove(key);
         }
 
-        /// <summary>
-        /// Вызывать при смене целевого сервера в UI - если активная CimSession была для ДРУГОГО
-        /// сервера, она больше не актуальна и её надо закрыть (иначе следующий вызов Invoke()
-        /// попробует использовать чужую сессию не по адресу).
-        /// </summary>
-        public static void InvalidateCimSessionIfServerChanged(string newComputerName)
+        /// <summary>Закрывает вообще все закешированные сессии сразу - вызывать при закрытии приложения.</summary>
+        public static void DisposeAllCimSessions()
         {
-            var normalized = (newComputerName ?? "").Trim();
-            if (_activeCimSession != null &&
-                !string.Equals(_activeCimSessionComputer, normalized, StringComparison.OrdinalIgnoreCase))
-            {
-                DisposeActiveCimSession();
-            }
+            foreach (var key in _cimSessions.Keys.ToList())
+                DisposeCimSession(key);
         }
 
         /// <summary>
@@ -223,12 +217,11 @@ namespace DnsToolWinForms
             if (applyGlobalComputerName && !string.IsNullOrWhiteSpace(ComputerName) &&
                 (parameters == null || !parameters.ContainsKey("ComputerName")))
             {
-                if (_activeCimSession != null &&
-                    string.Equals(_activeCimSessionComputer, ComputerName.Trim(), StringComparison.OrdinalIgnoreCase))
+                if (_cimSessions.TryGetValue(ComputerName.Trim(), out var sessionEntry))
                 {
                     // Есть готовая сессия с явными кредами для именно этого сервера - используем её
                     // вместо -ComputerName, иначе PowerShell снова попробует текущую Windows-учётку.
-                    ps.AddParameter("CimSession", _activeCimSession);
+                    ps.AddParameter("CimSession", sessionEntry.Session);
                 }
                 else
                 {
@@ -277,6 +270,19 @@ namespace DnsToolWinForms
                     return (new List<PSObject>(), log.ToString());
                 }
 
+                // WIN32 9603 "зона не поддерживает области" - структурное ограничение конкретного
+                // ТИПА зоны (условная пересылка / forwarder, и похожие), а не временная проблема
+                // или нехватка прав. У таких зон Zone Scopes в принципе не существуют - смысла
+                // повторять попытку или что-то настраивать нет, просто эта функция сюда неприменима.
+                if (description.IndexOf("9603", StringComparison.Ordinal) >= 0 &&
+                    description.IndexOf("области", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    log.AppendLine(
+                        "ОШИБКА: это зона условной пересылки (forwarder) или похожего типа - такие зоны не " +
+                        "поддерживают Zone Scopes и записи внутри них в принципе. Редактирование здесь невозможно.");
+                    return (new List<PSObject>(), log.ToString());
+                }
+
                 log.AppendLine($"ИСКЛЮЧЕНИЕ при вызове {cmdlet}: {description}");
                 return (new List<PSObject>(), log.ToString());
             }
@@ -293,10 +299,18 @@ namespace DnsToolWinForms
 
                     var isLocalCallForThisError = string.IsNullOrWhiteSpace(ComputerName) &&
                                                    (parameters == null || !parameters.ContainsKey("ComputerName"));
-                    if (isLocalCallForThisError && !IsRunningElevated &&
-                        LooksLikeAccessDenied(exceptionDescription ?? msg))
+                    var combinedText = exceptionDescription ?? msg;
+
+                    if (isLocalCallForThisError && !IsRunningElevated && LooksLikeAccessDenied(combinedText))
                     {
                         log.AppendLine("ОШИБКА: нужны права администратора для локальной работы с DNS Server на этой машине.");
+                    }
+                    else if (combinedText.IndexOf("9603", StringComparison.Ordinal) >= 0 &&
+                             combinedText.IndexOf("области", StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        log.AppendLine(
+                            "ОШИБКА: это зона условной пересылки (forwarder) или похожего типа - такие зоны не " +
+                            "поддерживают Zone Scopes и записи внутри них в принципе. Редактирование здесь невозможно.");
                     }
                     else
                     {
