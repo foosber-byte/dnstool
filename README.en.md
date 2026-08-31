@@ -6,7 +6,7 @@ A WinForms app for managing a Windows DNS Server — covers what `dnsmgmt.msc` d
 records inside a Zone Scope shown as a tree, client subnets, Query Resolution Policies,
 remote management of another server with its own authentication, self-updating from GitHub.
 
-Works through the built-in `DnsServer` PowerShell module. Author: foosber, 2026. v2.7.3.
+Works through the built-in `DnsServer` PowerShell module. Author: foosber, 2026. v2.7.4.
 
 ## Requirements
 
@@ -54,9 +54,14 @@ scope's records) — so it's obvious which button does what, now that everything
 tab.
 
 **Tree**: the top level is servers ("Local" + any server successfully connected to via the
-"Target DNS server" panel); inside each server — **"Forward Lookup Zones"** and **"Reverse
-Lookup Zones"** (determined by name — `.in-addr.arpa`/`.ip6.arpa` at the end means reverse;
-a purely visual grouping of already-loaded data, no extra server round-trip); inside each
+"Target DNS server" panel); inside each server — **"Forward Lookup Zones"**, **"Reverse
+Lookup Zones"** and (when present) **"Other zones (conditional forwarders, stub)"**. The
+category comes from the zone object itself: `ZoneType` `Forwarder`/`Stub` → "other";
+`IsReverseLookupZone` → "reverse" (falling back to the `.in-addr.arpa`/`.ip6.arpa` suffix);
+everything else → "forward". Auto-created service zones (`TrustAnchors`, root hints `.`,
+`0/127/255.in-addr.arpa`) are hidden — like the normal, non-"advanced", `dnsmgmt.msc` view.
+Conditional forwarder and stub zones are leaves (they don't support Zone Scopes,
+`WIN32 9603`); clicking one only shows its source. Inside each
 category — the zones themselves; inside a zone — its scopes; inside a scope — records
 grouped by compound names into folders (like `dnsmgmt.msc`): `admin.pro32connect` → folder
 `pro32connect`, item `admin`. Every level loads lazily (on first selection/expansion of its

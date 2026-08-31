@@ -62,11 +62,14 @@ namespace DnsToolWinForms
         /// <summary>Маркер узла-сервера в дереве (верхний уровень). Пустая ServerName = локальный компьютер.</summary>
         private class ServerNodeMarker { public string ServerName; }
 
-        /// <summary>Маркер узла-зоны в дереве (второй уровень, внутри узла сервера).</summary>
-        private class ZoneNodeMarker { public string ServerName; public string ZoneName; }
+        /// <summary>Маркер узла-зоны в дереве (второй уровень, внутри узла сервера). ScopesUnavailable = зона условной пересылки/stub: Zone Scopes она не поддерживает (WIN32 9603), это лист без догрузки.</summary>
+        private class ZoneNodeMarker { public string ServerName; public string ZoneName; public bool ScopesUnavailable; }
 
-        /// <summary>Маркер узла-категории "Зоны прямого/обратного просмотра" - чисто визуальная группировка, без обращения к серверу (определяется по имени уже загруженных зон).</summary>
-        private class ZoneCategoryMarker { public string ServerName; public bool IsReverse; }
+        /// <summary>Три верхних контейнера зон в дереве, как в dnsmgmt.msc.</summary>
+        private enum ZoneCategoryKind { Forward, Reverse, Other }
+
+        /// <summary>Маркер узла-категории ("Зоны прямого/обратного просмотра" / "Прочие зоны") - чисто визуальная группировка, без обращения к серверу.</summary>
+        private class ZoneCategoryMarker { public string ServerName; public ZoneCategoryKind Kind; }
 
         /// <summary>
         /// Узел дерева записей - группировка по составным именам (admin.pro32connect -> папка
@@ -646,9 +649,14 @@ namespace DnsToolWinForms
 
             var lines = new List<string>();
             foreach (TreeNode categoryNode in serverNode.Nodes)
+            {
+                // "Прочие" (условная пересылка / stub) не выгружаем - импорт создаёт зоны как Primary.
+                if (categoryNode.Tag is ZoneCategoryMarker cm && cm.Kind == ZoneCategoryKind.Other)
+                    continue;
                 foreach (TreeNode zoneNode in categoryNode.Nodes)
                     if (zoneNode.Tag is ZoneNodeMarker zm)
                         lines.Add(zm.ZoneName);
+            }
 
             ExportListToFile(lines, $"zones_{SanitizeForFileName(CurrentServerLabel())}_{DateTime.Now:yyyyMMdd_HHmmss}.txt",
                 $"Экспортировано {DateTime.Now:yyyy-MM-dd HH:mm:ss} с сервера: {CurrentServerLabel()}");
@@ -781,7 +789,7 @@ namespace DnsToolWinForms
                     SetCurrentServerContext(zoneMarker.ServerName);
                     cmbScopeZoneName.Text = zoneMarker.ZoneName;
                     await ShowSelectedZoneSourceAsync(zoneMarker.ServerName, zoneMarker.ZoneName);
-                    if (!_loadedZoneTreeNodes.Contains(node))
+                    if (!zoneMarker.ScopesUnavailable && !_loadedZoneTreeNodes.Contains(node))
                     {
                         await LoadZoneScopesIntoTreeAsync(node, zoneMarker.ServerName, zoneMarker.ZoneName);
                         node.Expand();
@@ -812,7 +820,7 @@ namespace DnsToolWinForms
             {
                 if (e.Node?.Tag is string scopeNameUnloaded && !_loadedScopeTreeNodes.Contains(e.Node))
                     await LoadScopeIntoTreeAsync(e.Node, scopeNameUnloaded);
-                else if (e.Node?.Tag is ZoneNodeMarker zoneMarker && !_loadedZoneTreeNodes.Contains(e.Node))
+                else if (e.Node?.Tag is ZoneNodeMarker zoneMarker && !zoneMarker.ScopesUnavailable && !_loadedZoneTreeNodes.Contains(e.Node))
                     await LoadZoneScopesIntoTreeAsync(e.Node, zoneMarker.ServerName, zoneMarker.ZoneName);
                 else if (e.Node?.Tag is ServerNodeMarker serverMarker && !_loadedServerTreeNodes.Contains(e.Node))
                     await LoadServerZonesIntoTreeAsync(e.Node, serverMarker.ServerName);
@@ -1190,7 +1198,13 @@ namespace DnsToolWinForms
             var (results, log) = await Task.Run(() => DnsHelper.Invoke("Get-DnsServerZone"));
             AppendLog(log);
 
-            var names = DnsHelper.GetStringProperty(results, "ZoneName");
+            // Только зоны, к которым применимы Zone Scopes - условная пересылка/stub и
+            // служебные авто-зоны в подсказки Scopes/Политик не нужны.
+            var names = results
+                .Where(IsScopeCapableZone)
+                .Select(o => o.Properties["ZoneName"]?.Value?.ToString())
+                .Where(n => !string.IsNullOrEmpty(n))
+                .ToList();
 
             foreach (var combo in new[] { cmbScopeZoneName, cmbPolicyZoneName })
             {
@@ -1199,6 +1213,19 @@ namespace DnsToolWinForms
                 foreach (var name in names) combo.Items.Add(name);
                 combo.Text = current; // не затираем то, что человек уже успел ввести/выбрать вручную
             }
+        }
+
+        /// <summary>
+        /// Зона, к которой применимы Zone Scopes (в дереве это "прямые"/"обратные", но не
+        /// "прочие"): не служебная авто-зона (TrustAnchors, корневые подсказки и т.п.) и
+        /// не условная пересылка / stub.
+        /// </summary>
+        private static bool IsScopeCapableZone(PSObject z)
+        {
+            if (z == null || DnsHelper.GetBool(z, "IsAutoCreated")) return false;
+            var t = z.Properties["ZoneType"]?.Value?.ToString() ?? "";
+            return !t.Equals("Forwarder", StringComparison.OrdinalIgnoreCase)
+                && !t.Equals("Stub", StringComparison.OrdinalIgnoreCase);
         }
 
         /// <summary>
@@ -1277,24 +1304,54 @@ namespace DnsToolWinForms
             _loadedServerTreeNodes.Add(serverNode);
             if (!WasSuccess(log)) return; // причина уже понятно объяснена в логе (не DNS-сервер / нет прав / WinRM и т.п.)
 
-            // Группировка прямая/обратная - чисто по имени уже загруженных зон (обратные всегда
-            // заканчиваются на .in-addr.arpa/.ip6.arpa), без отдельного обращения к серверу.
-            var forwardCategory = new TreeNode("Зоны прямого просмотра") { Tag = new ZoneCategoryMarker { ServerName = serverName, IsReverse = false } };
-            var reverseCategory = new TreeNode("Зоны обратного просмотра") { Tag = new ZoneCategoryMarker { ServerName = serverName, IsReverse = true } };
+            // Три контейнера, как в dnsmgmt.msc: прямого просмотра, обратного просмотра и
+            // "прочие" (условная пересылка + stub). Классификация - по ZoneType и
+            // IsReverseLookupZone из самого объекта, а не по суффиксу имени.
+            var forwardCategory = new TreeNode("Зоны прямого просмотра") { Tag = new ZoneCategoryMarker { ServerName = serverName, Kind = ZoneCategoryKind.Forward } };
+            var reverseCategory = new TreeNode("Зоны обратного просмотра") { Tag = new ZoneCategoryMarker { ServerName = serverName, Kind = ZoneCategoryKind.Reverse } };
+            var otherCategory = new TreeNode("Прочие зоны (условная пересылка, stub)") { Tag = new ZoneCategoryMarker { ServerName = serverName, Kind = ZoneCategoryKind.Other } };
             serverNode.Nodes.Add(forwardCategory);
             serverNode.Nodes.Add(reverseCategory);
+            serverNode.Nodes.Add(otherCategory);
 
-            var names = DnsHelper.GetStringProperty(results, "ZoneName");
-            foreach (var zoneName in names.OrderBy(n => n, StringComparer.OrdinalIgnoreCase))
+            foreach (var z in results
+                         .Where(o => o != null)
+                         .OrderBy(o => o.Properties["ZoneName"]?.Value?.ToString() ?? "", StringComparer.OrdinalIgnoreCase))
             {
-                var isReverse = zoneName.EndsWith(".in-addr.arpa", StringComparison.OrdinalIgnoreCase) ||
-                                 zoneName.EndsWith(".ip6.arpa", StringComparison.OrdinalIgnoreCase);
-                var category = isReverse ? reverseCategory : forwardCategory;
+                var zoneName = z.Properties["ZoneName"]?.Value?.ToString();
+                if (string.IsNullOrEmpty(zoneName)) continue;
 
-                var zoneNode = new TreeNode(zoneName) { Tag = new ZoneNodeMarker { ServerName = serverName, ZoneName = zoneName } };
-                zoneNode.Nodes.Add(new TreeNode("...")); // заглушка
+                // Служебные авто-зоны (TrustAnchors, корневые подсказки ".", 0/127/255.in-addr.arpa)
+                // в обычном (не "расширенном") виде оснастки скрыты - прячем и здесь.
+                if (DnsHelper.GetBool(z, "IsAutoCreated")) continue;
+
+                var zoneType = z.Properties["ZoneType"]?.Value?.ToString() ?? "";
+                var isForwarderOrStub = zoneType.Equals("Forwarder", StringComparison.OrdinalIgnoreCase)
+                                     || zoneType.Equals("Stub", StringComparison.OrdinalIgnoreCase);
+
+                // IsReverseLookupZone - родной признак PowerShell, надёжнее суффикса имени
+                // (ловит и нестандартно названные обратные зоны).
+                var isReverse = DnsHelper.GetBool(z, "IsReverseLookupZone")
+                                || zoneName.EndsWith(".in-addr.arpa", StringComparison.OrdinalIgnoreCase)
+                                || zoneName.EndsWith(".ip6.arpa", StringComparison.OrdinalIgnoreCase);
+
+                var category = isForwarderOrStub ? otherCategory
+                             : isReverse ? reverseCategory
+                             : forwardCategory;
+
+                var zoneNode = new TreeNode(zoneName)
+                {
+                    Tag = new ZoneNodeMarker { ServerName = serverName, ZoneName = zoneName, ScopesUnavailable = isForwarderOrStub }
+                };
+                // Условная пересылка / stub не поддерживают Zone Scopes (WIN32 9603) - без
+                // заглушки "...", это листья: по клику покажем только источник зоны.
+                if (!isForwarderOrStub) zoneNode.Nodes.Add(new TreeNode("..."));
                 category.Nodes.Add(zoneNode);
             }
+
+            // "Прочие" у большинства серверов пустые - не мозолим глаза. Прямые/обратные
+            // оставляем всегда, даже пустыми (привычное место).
+            if (otherCategory.Nodes.Count == 0) otherCategory.Remove();
         }
 
         /// <summary>Ленивая подгрузка: scope'ы конкретного узла-зоны (вызывается при первом выборе/раскрытии).</summary>
