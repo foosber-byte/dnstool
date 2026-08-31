@@ -386,6 +386,17 @@ namespace DnsToolWinForms
         }
 
         /// <summary>
+        /// Булево свойство PSObject: через in-process PowerShell приходит настоящим bool,
+        /// через CIM-сессию иногда строкой "True"/"False" - обрабатываем оба случая.
+        /// </summary>
+        public static bool GetBool(PSObject obj, string property)
+        {
+            var v = obj?.Properties[property]?.Value;
+            if (v is bool b) return b;
+            return bool.TryParse(v?.ToString(), out var parsed) && parsed;
+        }
+
+        /// <summary>
         /// Многие свойства DNS-объектов (ClientSubnet, ZoneScope и т.п.) на самом деле
         /// массивы/коллекции, а не простые строки - обычный ToString() на них выдаёт либо
         /// пустоту, либо "System.Object[]". Этот метод разворачивает такие значения в текст.
