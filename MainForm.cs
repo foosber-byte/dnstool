@@ -65,10 +65,10 @@ namespace DnsToolWinForms
         /// <summary>Маркер узла-зоны в дереве (второй уровень, внутри узла сервера). ScopesUnavailable = зона условной пересылки/stub: Zone Scopes она не поддерживает (WIN32 9603), это лист без догрузки.</summary>
         private class ZoneNodeMarker { public string ServerName; public string ZoneName; public bool ScopesUnavailable; }
 
-        /// <summary>Три верхних контейнера зон в дереве, как в dnsmgmt.msc.</summary>
-        private enum ZoneCategoryKind { Forward, Reverse, Other }
+        /// <summary>Верхние контейнеры зон в дереве, как в dnsmgmt.msc: прямого/обратного просмотра, зоны-заглушки (Stub) и серверы условной пересылки (Forwarder).</summary>
+        private enum ZoneCategoryKind { Forward, Reverse, Stub, Forwarder }
 
-        /// <summary>Маркер узла-категории ("Зоны прямого/обратного просмотра" / "Прочие зоны") - чисто визуальная группировка, без обращения к серверу.</summary>
+        /// <summary>Маркер узла-категории ("Зоны прямого/обратного просмотра" / "Зоны-заглушки" / "Серверы условной пересылки") - чисто визуальная группировка, без обращения к серверу.</summary>
         private class ZoneCategoryMarker { public string ServerName; public ZoneCategoryKind Kind; }
 
         /// <summary>
@@ -90,6 +90,7 @@ namespace DnsToolWinForms
         private TextBox txtSubnetCidr;
 
         // ---- вкладка "Политики" ----
+        private ComboBox cmbPolicyServer;   // на каком сервере смотрим/создаём политики (локальный + успешно подключённые удалённые)
         private ComboBox cmbPolicyZoneName; // выпадающий список зон, как на вкладке Scopes
         private ListBox lstPolicies;
         private RichTextBox rtbPolicyDetails; // подробности выбранной политики (подсети/scope), чтобы не уезжало за экран одной строкой
@@ -98,12 +99,37 @@ namespace DnsToolWinForms
         private TextBox txtPolicyScopeName;
         private List<PolicyInfo> _lastPolicies = new List<PolicyInfo>(); // 1:1 с элементами lstPolicies
 
+        // Удалённые серверы, к которым в ТЕКУЩЕЙ сессии приложения было успешное подключение
+        // (успешно загрузились зоны либо прошла явная авторизация). Источник для выпадашки
+        // "Сервер" на вкладке "Политики".
+        private readonly HashSet<string> _connectedRemoteServers = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
         private class PolicyInfo
         {
             public string Name;
             public string SubnetDisplay; // "net_100 (10.0.100.0/24), Old_DNS_redirect13 (...)"
             public string Scope;
         }
+
+        /// <summary>Элемент выпадашки "Сервер" на вкладке "Политики": Server = "" означает локальный компьютер.</summary>
+        private sealed class PolicyServerItem
+        {
+            public readonly string Server;
+            private readonly string _label;
+            public PolicyServerItem(string server, string label) { Server = server; _label = label; }
+            public override string ToString() => _label;
+        }
+
+        // Пока false - обработчики UI, которые дёргают сервер (например смена сервера на вкладке
+        // "Политики"), не должны срабатывать: часть контролов ещё строится, txtOutput может не
+        // существовать. Выставляется в Shown, после первичной инициализации.
+        private bool _uiReady;
+
+        // true, пока RefreshPolicyServerCombo() программно пересобирает выпадашку "Сервер" на
+        // вкладке "Политики". Нужно, чтобы её SelectedIndexChanged НЕ трогал глобальный
+        // DnsHelper.ComputerName во время пересборки (иначе перезатирал контекст, выбранный
+        // деревом/верхней панелью - именно из-за этого "авторизация ОК, а список по кругу").
+        private bool _rebuildingPolicyServerCombo;
 
         public MainForm()
         {
@@ -115,6 +141,8 @@ namespace DnsToolWinForms
                 // (переключения не было), поэтому инициализируем дерево явно здесь же.
                 InitializeServerTree();
                 await RefreshAllZoneCombosAsync(); // держим внутренний список зон наполненным - используется в подсказках диалогов создания
+                _uiReady = true;
+                RefreshPolicyServerCombo();
             };
             FormClosing += (s, e) => DnsHelper.DisposeAllCimSessions();
         }
@@ -154,8 +182,10 @@ namespace DnsToolWinForms
                         InitializeServerTree();
                         await RefreshAllZoneCombosAsync();
                         break;
-                    case 2 when cmbPolicyZoneName.Items.Count == 0:
-                        await RefreshAllZoneCombosAsync();
+                    case 2:
+                        RefreshPolicyServerCombo(); // вдруг с прошлого захода подключились новые серверы
+                        if (cmbPolicyZoneName.Items.Count == 0)
+                            await RefreshPolicyZoneComboAsync();
                         break;
                 }
             };
@@ -335,6 +365,7 @@ namespace DnsToolWinForms
         private async Task TestTargetServerConnectionAsync()
         {
             var target = chkLocalServer.Checked ? "" : cmbTargetServer.Text.Trim();
+            UpdateTargetComputerName(); // жёстко синхронизируем контекст с верхней панелью - вкладка "Политики" могла его перевести на другой сервер
             AppendLog(chkLocalServer.Checked
                 ? "Проверяю подключение к локальному DNS-серверу..."
                 : $"Проверяю подключение к '{target}'...");
@@ -347,31 +378,91 @@ namespace DnsToolWinForms
                 AppendLog($"OK: подключение работает, зон видно: {results.Count}");
                 AddServerRootIfMissing(""); // на случай, если это первое обращение к дереву вообще - гарантируем, что "Локальный" тоже на месте
                 AddServerRootIfMissing(target); // появляется в дереве слева на вкладке "Scopes и записи", тем же принципом, что и локальный
+                MarkRemoteConnected(target);
                 return;
+            }
+
+            if (chkLocalServer.Checked || string.IsNullOrEmpty(target)) return; // локально тут диагностировать нечего
+
+            // Ошибка похожа на проблему транспорта (WinRM не запущен / сеть / TrustedHosts), а не
+            // на нехватку прав? Тогда сначала чиним транспорт - иначе и окно ввода логина упрётся
+            // ровно в то же самое. Все проверки RemoteConnectDiagnostics делает в фоне.
+            if (LooksLikeTransportProblem(log))
+            {
+                var changed = await RemoteConnectDiagnostics.RunAsync(this, target, AppendLog);
+                if (changed)
+                {
+                    AppendLog("Повторно проверяю подключение после изменений...");
+                    var (r2, l2) = await Task.Run(() => DnsHelper.Invoke("Get-DnsServerZone"));
+                    AppendLog(l2);
+                    if (WasSuccess(l2))
+                    {
+                        AppendLog($"OK: подключение работает, зон видно: {r2.Count}");
+                        AddServerRootIfMissing("");
+                        AddServerRootIfMissing(target);
+                        MarkRemoteConnected(target);
+                        return;
+                    }
+                }
             }
 
             // Обычная проверка не удалась - для удалённого сервера предлагаем ввести другие
             // учётные данные (текущая Windows-учётка может просто не иметь прав на этом сервере).
-            if (!chkLocalServer.Checked && !string.IsNullOrEmpty(target))
+            AppendLog("Подключение не удалось текущей учётной записью - предлагаю ввести другие данные...");
+            var authOk = ServerAuthDialog.Show(target);
+            if (!authOk)
             {
-                AppendLog("Подключение не удалось текущей учётной записью - предлагаю ввести другие данные...");
-                var authOk = ServerAuthDialog.Show(target);
+                // Логин упал на том же транспорте - ещё раз предложим починить его и повторить вход.
+                if (LooksLikeTransportProblem(ServerAuthDialog.LastError) &&
+                    await RemoteConnectDiagnostics.RunAsync(this, target, AppendLog))
+                {
+                    authOk = ServerAuthDialog.Show(target);
+                }
                 if (!authOk)
                 {
                     AppendLog("Аутентификация отменена или не удалась - работаем без доступа к этому серверу.");
                     return;
                 }
-
-                AppendLog("Повторно проверяю подключение с новыми учётными данными...");
-                var (retryResults, retryLog) = await Task.Run(() => DnsHelper.Invoke("Get-DnsServerZone"));
-                AppendLog(retryLog);
-                if (WasSuccess(retryLog))
-                {
-                    AppendLog($"OK: подключение работает, зон видно: {retryResults.Count}");
-                    AddServerRootIfMissing(""); // та же подстраховка - гарантируем "Локальный" на месте
-                    AddServerRootIfMissing(target); // тот же принцип - сервер появляется в дереве после успешной авторизации
-                }
             }
+
+            AppendLog("Повторно проверяю подключение с новыми учётными данными...");
+            var (retryResults, retryLog) = await Task.Run(() => DnsHelper.Invoke("Get-DnsServerZone"));
+            AppendLog(retryLog);
+            if (WasSuccess(retryLog))
+            {
+                AppendLog($"OK: подключение работает, зон видно: {retryResults.Count}");
+                AddServerRootIfMissing(""); // та же подстраховка - гарантируем "Локальный" на месте
+                AddServerRootIfMissing(target); // тот же принцип - сервер появляется в дереве после успешной авторизации
+                MarkRemoteConnected(target);
+            }
+        }
+
+        /// <summary>Запоминает удалённый сервер как успешно подключённый в этой сессии и обновляет выпадашку "Сервер" на вкладке "Политики".</summary>
+        private void MarkRemoteConnected(string server)
+        {
+            if (!string.IsNullOrWhiteSpace(server) && _connectedRemoteServers.Add(server.Trim()))
+                RefreshPolicyServerCombo();
+        }
+
+        /// <summary>
+        /// Похоже ли сообщение об ошибке на проблему транспорта (WinRM не запущен, узел
+        /// недоступен, нужен TrustedHosts), а не на отказ по правам/паролю. По этому признаку
+        /// решаем, звать ли RemoteConnectDiagnostics до окна ввода логина.
+        /// </summary>
+        private static bool LooksLikeTransportProblem(string text)
+        {
+            if (string.IsNullOrEmpty(text)) return false;
+            foreach (var marker in new[]
+            {
+                "WinRM", "TrustedHosts", "WS-Management", "Test-WSMan",
+                "не удается обработать запрос", "cannot process the request",
+                "RPC", "1722", "не прослушивает", "not listening",
+                "не удалось подключиться к", "cannot connect to", "actively refused", "недоступен"
+            })
+            {
+                if (text.IndexOf(marker, StringComparison.OrdinalIgnoreCase) >= 0) return true;
+            }
+            return false;
         }
 
         private Control BuildOutputPanel()
@@ -650,8 +741,9 @@ namespace DnsToolWinForms
             var lines = new List<string>();
             foreach (TreeNode categoryNode in serverNode.Nodes)
             {
-                // "Прочие" (условная пересылка / stub) не выгружаем - импорт создаёт зоны как Primary.
-                if (categoryNode.Tag is ZoneCategoryMarker cm && cm.Kind == ZoneCategoryKind.Other)
+                // Зоны-заглушки и серверы условной пересылки не выгружаем - импорт создаёт зоны как Primary.
+                if (categoryNode.Tag is ZoneCategoryMarker cm &&
+                    (cm.Kind == ZoneCategoryKind.Stub || cm.Kind == ZoneCategoryKind.Forwarder))
                     continue;
                 foreach (TreeNode zoneNode in categoryNode.Nodes)
                     if (zoneNode.Tag is ZoneNodeMarker zm)
@@ -765,12 +857,17 @@ namespace DnsToolWinForms
             // (группировка по составным именам, как в dnsmgmt.msc). Scope подгружается ЛЕНИВО -
             // при первом выборе/раскрытии его узла, а не все разом (некоторые scope содержат
             // сотни записей - незачем тянуть их все, если человек смотрит только один).
-            treeRecordFolders = new TreeView { HideSelection = false };
+            treeRecordFolders = new TreeView { HideSelection = false, DrawMode = TreeViewDrawMode.OwnerDrawText };
+            treeRecordFolders.DrawNode += TreeServerNode_DrawNode;
             treeRecordFolders.AfterSelect += async (s, e) =>
             {
                 var node = e.Node;
                 if (node?.Tag is RecordTreeNode rtn)
                 {
+                    // Восстанавливаем целевой сервер + зону по положению узла в дереве - иначе
+                    // при нескольких подключённых серверах правка записи ушла бы на тот сервер,
+                    // чью зону/scope выбирали последним, а не на владельца этой папки.
+                    SyncContextToTreeNode(node);
                     _currentFolderNode = rtn;
                     var root = rtn;
                     while (root.Parent != null) root = root.Parent;
@@ -781,6 +878,7 @@ namespace DnsToolWinForms
                 }
                 else if (node?.Tag is string scopeNameUnloaded && !_loadedScopeTreeNodes.Contains(node))
                 {
+                    SyncContextToTreeNode(node);
                     await LoadScopeIntoTreeAsync(node, scopeNameUnloaded);
                     node.Expand();
                 }
@@ -819,7 +917,10 @@ namespace DnsToolWinForms
             treeRecordFolders.BeforeExpand += async (s, e) =>
             {
                 if (e.Node?.Tag is string scopeNameUnloaded && !_loadedScopeTreeNodes.Contains(e.Node))
+                {
+                    SyncContextToTreeNode(e.Node);
                     await LoadScopeIntoTreeAsync(e.Node, scopeNameUnloaded);
+                }
                 else if (e.Node?.Tag is ZoneNodeMarker zoneMarker && !zoneMarker.ScopesUnavailable && !_loadedZoneTreeNodes.Contains(e.Node))
                     await LoadZoneScopesIntoTreeAsync(e.Node, zoneMarker.ServerName, zoneMarker.ZoneName);
                 else if (e.Node?.Tag is ServerNodeMarker serverMarker && !_loadedServerTreeNodes.Contains(e.Node))
@@ -1222,10 +1323,34 @@ namespace DnsToolWinForms
         /// </summary>
         private static bool IsScopeCapableZone(PSObject z)
         {
-            if (z == null || DnsHelper.GetBool(z, "IsAutoCreated")) return false;
+            if (z == null) return false;
+            var zoneName = z.Properties["ZoneName"]?.Value?.ToString();
+            if (IsServiceAutoZone(z, zoneName)) return false;
             var t = z.Properties["ZoneType"]?.Value?.ToString() ?? "";
             return !t.Equals("Forwarder", StringComparison.OrdinalIgnoreCase)
                 && !t.Equals("Stub", StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
+        /// Служебная зона, которую стандартная оснастка dnsmgmt.msc в обычном (не "расширенном")
+        /// виде не показывает: помеченные IsAutoCreated, а также TrustAnchors (DNSSEC) и корневые
+        /// подсказки ".", у которых этот флаг на контроллере домена бывает не выставлен - поэтому
+        /// дополнительно ловим их по имени. Редактировать/смотреть scope в них всё равно нельзя
+        /// (WIN32 9611/9603), а сырой дамп ошибки в выводе только путает.
+        /// </summary>
+        private static bool IsServiceAutoZone(PSObject z, string zoneName)
+        {
+            if (z != null && DnsHelper.GetBool(z, "IsAutoCreated")) return true;
+
+            var zoneType = z?.Properties["ZoneType"]?.Value?.ToString() ?? "";
+            if (zoneType.Equals("Cache", StringComparison.OrdinalIgnoreCase)) return true; // псевдо-зона кэша / корневых подсказок
+
+            var n = (zoneName ?? "").Trim().TrimEnd('.');
+            return n.Length == 0 // корневые подсказки "."
+                || n.Equals("TrustAnchors", StringComparison.OrdinalIgnoreCase)
+                || n.Equals("0.in-addr.arpa", StringComparison.OrdinalIgnoreCase)
+                || n.Equals("127.in-addr.arpa", StringComparison.OrdinalIgnoreCase)
+                || n.Equals("255.in-addr.arpa", StringComparison.OrdinalIgnoreCase);
         }
 
         /// <summary>
@@ -1248,6 +1373,40 @@ namespace DnsToolWinForms
             AddServerRootIfMissing(""); // локальный сервер всегда первым
         }
 
+        /// <summary>
+        /// Узлы-серверы (верхний уровень) рисуем сами: сплошная заливка на всю ширину дерева
+        /// (штатный BackColor у TreeNode тянется только под текст - у коротких имён выглядит
+        /// обрезанным) плюс линия-разделитель по верхней кромке между соседними серверами.
+        /// Все остальные узлы отдаём системной отрисовке (e.DrawDefault).
+        /// </summary>
+        private void TreeServerNode_DrawNode(object sender, DrawTreeNodeEventArgs e)
+        {
+            if (!(e.Node.Tag is ServerNodeMarker) || e.Bounds.Height <= 0)
+            {
+                e.DrawDefault = true;
+                return;
+            }
+
+            var g = e.Graphics;
+            int right = treeRecordFolders.ClientRectangle.Right;
+            bool selected = (e.State & TreeNodeStates.Selected) != 0;
+
+            using (var bg = new SolidBrush(selected ? Color.MediumBlue : Color.RoyalBlue))
+                g.FillRectangle(bg, new Rectangle(e.Bounds.Left, e.Bounds.Top, right - e.Bounds.Left, e.Bounds.Height));
+
+            // Разделитель между серверами - линия по верхней кромке узла (у самого первого не нужна).
+            if (treeRecordFolders.Nodes.IndexOf(e.Node) > 0)
+                using (var pen = new Pen(Color.Silver))
+                    g.DrawLine(pen, 0, e.Bounds.Top, right, e.Bounds.Top);
+
+            TextRenderer.DrawText(g, e.Node.Text, e.Node.NodeFont ?? treeRecordFolders.Font,
+                new Rectangle(e.Bounds.Left, e.Bounds.Top, right - e.Bounds.Left, e.Bounds.Height),
+                Color.White, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+        }
+
+        /// <summary>Имя ЭТОГО компьютера в верхнем регистре - подпись узла локального сервера в дереве (раньше было просто "Локальный").</summary>
+        private static string LocalServerNodeLabel() => Environment.MachineName.ToUpperInvariant();
+
         /// <summary>Находит узел-сервер по имени, а если его ещё нет в дереве - создаёт (с заглушкой внутри, ленивая подгрузка).</summary>
         private TreeNode AddServerRootIfMissing(string serverName)
         {
@@ -1258,7 +1417,7 @@ namespace DnsToolWinForms
                     return existing;
             }
 
-            var label = string.IsNullOrEmpty(normalized) ? "Локальный" : normalized;
+            var label = string.IsNullOrEmpty(normalized) ? LocalServerNodeLabel() : normalized;
             var node = new TreeNode(label)
             {
                 Tag = new ServerNodeMarker { ServerName = normalized },
@@ -1269,6 +1428,29 @@ namespace DnsToolWinForms
             node.Nodes.Add(new TreeNode("...")); // заглушка для стрелки разворачивания
             treeRecordFolders.Nodes.Add(node);
             return node;
+        }
+
+        /// <summary>Идёт вверх по дереву от любого узла (scope / папка записей) до узла-зоны и возвращает его маркер.</summary>
+        private static ZoneNodeMarker OwningZoneMarker(TreeNode node)
+        {
+            for (var n = node; n != null; n = n.Parent)
+                if (n.Tag is ZoneNodeMarker zm) return zm;
+            return null;
+        }
+
+        /// <summary>
+        /// Восстанавливает глобальный контекст (целевой сервер + имя зоны) по положению узла
+        /// в дереве. Нужно перед любой операцией с scope/записями: при нескольких подключённых
+        /// серверах DnsHelper.ComputerName - один на всё приложение, и без этой синхронизации
+        /// правка ушла бы на сервер, чью ветку дерева трогали последней, а не на владельца
+        /// выбранного узла.
+        /// </summary>
+        private void SyncContextToTreeNode(TreeNode node)
+        {
+            var zm = OwningZoneMarker(node);
+            if (zm == null) return;
+            SetCurrentServerContext(zm.ServerName);
+            cmbScopeZoneName.Text = zm.ZoneName;
         }
 
         /// <summary>
@@ -1304,15 +1486,20 @@ namespace DnsToolWinForms
             _loadedServerTreeNodes.Add(serverNode);
             if (!WasSuccess(log)) return; // причина уже понятно объяснена в логе (не DNS-сервер / нет прав / WinRM и т.п.)
 
-            // Три контейнера, как в dnsmgmt.msc: прямого просмотра, обратного просмотра и
-            // "прочие" (условная пересылка + stub). Классификация - по ZoneType и
+            if (!string.IsNullOrEmpty(serverName) && _connectedRemoteServers.Add(serverName))
+                RefreshPolicyServerCombo(); // новый удалённый сервер стал доступен - показать его в выпадашке "Политики"
+
+            // Контейнеры, как в dnsmgmt.msc: прямого просмотра, обратного просмотра, зоны-заглушки
+            // (Stub) и серверы условной пересылки (Forwarder). Классификация - по ZoneType и
             // IsReverseLookupZone из самого объекта, а не по суффиксу имени.
             var forwardCategory = new TreeNode("Зоны прямого просмотра") { Tag = new ZoneCategoryMarker { ServerName = serverName, Kind = ZoneCategoryKind.Forward } };
             var reverseCategory = new TreeNode("Зоны обратного просмотра") { Tag = new ZoneCategoryMarker { ServerName = serverName, Kind = ZoneCategoryKind.Reverse } };
-            var otherCategory = new TreeNode("Прочие зоны (условная пересылка, stub)") { Tag = new ZoneCategoryMarker { ServerName = serverName, Kind = ZoneCategoryKind.Other } };
+            var stubCategory = new TreeNode("Зоны-заглушки") { Tag = new ZoneCategoryMarker { ServerName = serverName, Kind = ZoneCategoryKind.Stub } };
+            var forwarderCategory = new TreeNode("Серверы условной пересылки") { Tag = new ZoneCategoryMarker { ServerName = serverName, Kind = ZoneCategoryKind.Forwarder } };
             serverNode.Nodes.Add(forwardCategory);
             serverNode.Nodes.Add(reverseCategory);
-            serverNode.Nodes.Add(otherCategory);
+            serverNode.Nodes.Add(stubCategory);
+            serverNode.Nodes.Add(forwarderCategory);
 
             foreach (var z in results
                          .Where(o => o != null)
@@ -1323,11 +1510,12 @@ namespace DnsToolWinForms
 
                 // Служебные авто-зоны (TrustAnchors, корневые подсказки ".", 0/127/255.in-addr.arpa)
                 // в обычном (не "расширенном") виде оснастки скрыты - прячем и здесь.
-                if (DnsHelper.GetBool(z, "IsAutoCreated")) continue;
+                if (IsServiceAutoZone(z, zoneName)) continue;
 
                 var zoneType = z.Properties["ZoneType"]?.Value?.ToString() ?? "";
-                var isForwarderOrStub = zoneType.Equals("Forwarder", StringComparison.OrdinalIgnoreCase)
-                                     || zoneType.Equals("Stub", StringComparison.OrdinalIgnoreCase);
+                var isStub = zoneType.Equals("Stub", StringComparison.OrdinalIgnoreCase);
+                var isForwarder = zoneType.Equals("Forwarder", StringComparison.OrdinalIgnoreCase);
+                var isForwarderOrStub = isStub || isForwarder;
 
                 // IsReverseLookupZone - родной признак PowerShell, надёжнее суффикса имени
                 // (ловит и нестандартно названные обратные зоны).
@@ -1335,7 +1523,8 @@ namespace DnsToolWinForms
                                 || zoneName.EndsWith(".in-addr.arpa", StringComparison.OrdinalIgnoreCase)
                                 || zoneName.EndsWith(".ip6.arpa", StringComparison.OrdinalIgnoreCase);
 
-                var category = isForwarderOrStub ? otherCategory
+                var category = isStub ? stubCategory
+                             : isForwarder ? forwarderCategory
                              : isReverse ? reverseCategory
                              : forwardCategory;
 
@@ -1349,9 +1538,10 @@ namespace DnsToolWinForms
                 category.Nodes.Add(zoneNode);
             }
 
-            // "Прочие" у большинства серверов пустые - не мозолим глаза. Прямые/обратные
-            // оставляем всегда, даже пустыми (привычное место).
-            if (otherCategory.Nodes.Count == 0) otherCategory.Remove();
+            // Заглушки и условная пересылка у большинства серверов пустые - не мозолим глаза.
+            // Прямые/обратные оставляем всегда, даже пустыми (привычное место).
+            if (stubCategory.Nodes.Count == 0) stubCategory.Remove();
+            if (forwarderCategory.Nodes.Count == 0) forwarderCategory.Remove();
         }
 
         /// <summary>Ленивая подгрузка: scope'ы конкретного узла-зоны (вызывается при первом выборе/раскрытии).</summary>
@@ -1363,11 +1553,23 @@ namespace DnsToolWinForms
             AppendLog($"Загружаю scopes зоны '{zoneName}'...");
             var parameters = new Dictionary<string, object> { ["ZoneName"] = zoneName };
             var (results, log) = await Task.Run(() => DnsHelper.Invoke("Get-DnsServerZoneScope", parameters));
-            AppendLog(log);
 
             zoneNode.Nodes.Clear();
             _loadedZoneTreeNodes.Add(zoneNode);
-            if (!WasSuccess(log)) return; // например forwarder-зона (WIN32 9603) - понятное сообщение уже в логе
+
+            if (!WasSuccess(log))
+            {
+                // Не вываливаем сырой CIM-дамп (WIN32 9603/9611 и т.п.) - для зон такого типа
+                // Zone Scopes просто неприменимы. Короткое сообщение с выделенными именами.
+                AppendLogStyled(
+                    ("Зона ", false, false),
+                    (zoneName, true, true),
+                    (" на сервере ", false, false),
+                    (CurrentServerLabel(), true, true),
+                    (" не поддерживает Zone Scopes - просматривать и править области в ней нельзя.", false, false));
+                return;
+            }
+            AppendLog(log);
 
             var scopeNames = DnsHelper.GetStringProperty(results, "ZoneScope");
             if (scopeNames.Count == 0) scopeNames = DnsHelper.GetStringProperty(results, "Name");
@@ -2195,6 +2397,7 @@ namespace DnsToolWinForms
         /// </summary>
         private async Task LoadScopeIntoTreeAsync(TreeNode scopeNode, string scopeName)
         {
+            SyncContextToTreeNode(scopeNode); // сервер+зона строго по владельцу этого узла (важно при нескольких серверах)
             var zoneName = Val(cmbScopeZoneName);
             if (string.IsNullOrEmpty(zoneName)) return;
 
@@ -2244,7 +2447,10 @@ namespace DnsToolWinForms
             if (node == null) return;
             _currentFolderNode = node;
             if (_folderToTreeNode.TryGetValue(node, out var tn))
+            {
                 treeRecordFolders.SelectedNode = tn; // синхронизируем дерево, если навигация пришла не из него
+                SyncContextToTreeNode(tn);           // и целевой сервер/зону - тоже по этому узлу
+            }
             UpdateCurrentFolderPathLabel();
             RenderRecordsList();
         }
@@ -2719,9 +2925,20 @@ namespace DnsToolWinForms
                 BackColor = Color.White
             };
 
+            cmbPolicyServer = new ComboBox { Width = 200, DropDownStyle = ComboBoxStyle.DropDownList };
+            cmbPolicyServer.SelectedIndexChanged += async (s, e) =>
+            {
+                if (!_uiReady || _rebuildingPolicyServerCombo) return; // пересборка списка не должна менять контекст
+                ApplyPolicyServerContext();
+                lstPolicies.Items.Clear();
+                _lastPolicies.Clear();
+                rtbPolicyDetails.Clear();
+                await RefreshPolicyZoneComboAsync();
+            };
+
             cmbPolicyZoneName = new ComboBox { Width = 220, DropDownStyle = ComboBoxStyle.DropDown };
             var btnLoadPolicyZoneNames = IconFactory.CreateButton(IconFactory.Refresh(), "Обновить список зон", _toolTip,
-                async (s, e) => await RefreshAllZoneCombosAsync());
+                async (s, e) => await RefreshPolicyZoneComboAsync());
 
             var btnRefresh = IconFactory.CreateButton(IconFactory.Folder(), "Показать политики зоны", _toolTip,
                 async (s, e) => await RefreshPoliciesAsync());
@@ -2731,8 +2948,10 @@ namespace DnsToolWinForms
             txtPolicyScopeName = Tb(140, "имя scope");
             var btnAdd = IconFactory.CreateButton(IconFactory.Add(), "Создать политику (привязать подсеть к scope)...", _toolTip, async (s, e) =>
             {
+                ApplyPolicyServerContext();
                 var zoneHint = string.IsNullOrEmpty(Val(cmbPolicyZoneName)) ? "(зона не выбрана)" : Val(cmbPolicyZoneName);
-                var (name, subnets, scope) = AddPolicyDialog.Show(zoneHint);
+                var subnetNames = await FetchClientSubnetNamesAsync();
+                var (name, subnets, scope) = AddPolicyDialog.Show(zoneHint, subnetNames);
                 if (name == null) return;
                 txtPolicyName.Text = name;
                 txtPolicySubnetName.Text = subnets;
@@ -2743,11 +2962,17 @@ namespace DnsToolWinForms
             var btnRemove = IconFactory.CreateButton(IconFactory.Delete(), "Удалить выбранную политику", _toolTip,
                 async (s, e) => await RemovePolicyAsync());
 
+            var btnDuplicate = IconFactory.CreateButton(IconFactory.Duplicate(), "Дублировать политику на другие scope'ы / зоны...", _toolTip,
+                async (s, e) => await DuplicatePolicyAsync());
+
             lstPolicies.SelectedIndexChanged += (s, e) => ShowPolicyDetails();
 
+            RefreshPolicyServerCombo(); // локальный + уже подключённые удалённые (пополняется по мере подключений)
+
             var column = Column(
-                Row(new Label { Text = "Зона:", AutoSize = true, Margin = new Padding(4, 8, 4, 2) }, cmbPolicyZoneName, btnLoadPolicyZoneNames, btnRefresh,
-                    new Label { Text = "  ", AutoSize = true }, btnAdd, btnRemove)
+                Row(new Label { Text = "Сервер:", AutoSize = true, Margin = new Padding(4, 8, 4, 2) }, cmbPolicyServer,
+                    new Label { Text = "Зона:", AutoSize = true, Margin = new Padding(12, 8, 4, 2) }, cmbPolicyZoneName, btnLoadPolicyZoneNames, btnRefresh,
+                    new Label { Text = "  ", AutoSize = true }, btnAdd, btnRemove, btnDuplicate)
             );
 
             return WrapTabTwoLists("Политики", column,
@@ -2756,8 +2981,107 @@ namespace DnsToolWinForms
                 "PoliciesSplitter");
         }
 
+        /// <summary>Список серверов для выпадашки на вкладке "Политики": локальный + все удалённые с успешным подключением в этой сессии.</summary>
+        private IEnumerable<string> ConnectedRemoteServers() =>
+            _connectedRemoteServers
+                .Concat(DnsHelper.ActiveRemoteServers)
+                .Where(s => !string.IsNullOrWhiteSpace(s))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(s => s, StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// Пересобирает выпадашку "Сервер" на вкладке "Политики". НЕ трогает глобальный
+        /// DnsHelper.ComputerName (флаг _rebuildingPolicyServerCombo глушит SelectedIndexChanged).
+        /// Выбор: если пользователь уже выбрал здесь конкретный удалённый сервер - оставляем его;
+        /// иначе следуем за текущим рабочим сервером (тем, что выбран деревом/верхней панелью).
+        /// </summary>
+        private void RefreshPolicyServerCombo()
+        {
+            if (cmbPolicyServer == null) return;
+
+            _rebuildingPolicyServerCombo = true;
+            try
+            {
+                var current = (cmbPolicyServer.SelectedItem as PolicyServerItem)?.Server ?? "";
+                var want = string.IsNullOrEmpty(current) ? (DnsHelper.ComputerName ?? "").Trim() : current;
+
+                cmbPolicyServer.BeginUpdate();
+                cmbPolicyServer.Items.Clear();
+                cmbPolicyServer.Items.Add(new PolicyServerItem("", $"(локальный) {LocalServerNodeLabel()}"));
+                foreach (var srv in ConnectedRemoteServers())
+                    cmbPolicyServer.Items.Add(new PolicyServerItem(srv, srv));
+                cmbPolicyServer.EndUpdate();
+
+                var restore = 0;
+                for (int i = 0; i < cmbPolicyServer.Items.Count; i++)
+                    if (((PolicyServerItem)cmbPolicyServer.Items[i]).Server.Equals(want, StringComparison.OrdinalIgnoreCase)) { restore = i; break; }
+                cmbPolicyServer.SelectedIndex = restore;
+            }
+            finally
+            {
+                _rebuildingPolicyServerCombo = false;
+            }
+        }
+
+        /// <summary>Ставит DnsHelper.ComputerName по выбранному на вкладке "Политики" серверу (пусто = локальный). Вызывать только из действий этой вкладки, не из пересборки списка.</summary>
+        private void ApplyPolicyServerContext()
+        {
+            DnsHelper.ComputerName = (cmbPolicyServer?.SelectedItem as PolicyServerItem)?.Server ?? "";
+        }
+
+        /// <summary>Заполняет только выпадашку зон вкладки "Политики" - по выбранному там серверу (не трогает список зон вкладки Scopes).</summary>
+        private async Task RefreshPolicyZoneComboAsync()
+        {
+            ApplyPolicyServerContext();
+            var names = await FetchScopeCapableZoneNamesAsync();
+
+            var cur = cmbPolicyZoneName.Text;
+            cmbPolicyZoneName.Items.Clear();
+            foreach (var n in names) cmbPolicyZoneName.Items.Add(n);
+            cmbPolicyZoneName.Text = cur;
+        }
+
+        /// <summary>Имена клиентских подсетей текущего (для вкладки "Политики") сервера - для пикера в диалоге создания политики.</summary>
+        private async Task<List<string>> FetchClientSubnetNamesAsync()
+        {
+            ApplyPolicyServerContext();
+            var (results, _) = await Task.Run(() => DnsHelper.Invoke("Get-DnsServerClientSubnet"));
+            return results
+                .Select(r => r.Properties["Name"]?.Value?.ToString())
+                .Where(n => !string.IsNullOrEmpty(n))
+                .OrderBy(n => n, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+
+        /// <summary>Имена зон (только те, что поддерживают Zone Scopes) текущего для вкладки "Политики" сервера.</summary>
+        private async Task<List<string>> FetchScopeCapableZoneNamesAsync()
+        {
+            ApplyPolicyServerContext();
+            var (results, log) = await Task.Run(() => DnsHelper.Invoke("Get-DnsServerZone"));
+            AppendLog(log);
+            return results
+                .Where(IsScopeCapableZone)
+                .Select(o => o.Properties["ZoneName"]?.Value?.ToString())
+                .Where(n => !string.IsNullOrEmpty(n))
+                .OrderBy(n => n, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+
+        /// <summary>Имена scope'ов зоны на текущем для вкладки "Политики" сервере.</summary>
+        private async Task<List<string>> FetchZoneScopeNamesAsync(string zoneName)
+        {
+            ApplyPolicyServerContext();
+            var (results, log) = await Task.Run(() => DnsHelper.Invoke("Get-DnsServerZoneScope",
+                new Dictionary<string, object> { ["ZoneName"] = zoneName }));
+            AppendLog(log);
+            var names = DnsHelper.GetStringProperty(results, "ZoneScope");
+            if (names.Count == 0) names = DnsHelper.GetStringProperty(results, "Name");
+            return names;
+        }
+
         private async Task RefreshPoliciesAsync()
         {
+            ApplyPolicyServerContext();
             var zoneName = Val(cmbPolicyZoneName);
             if (string.IsNullOrEmpty(zoneName)) { AppendLog("Укажи имя зоны."); return; }
 
@@ -2842,6 +3166,7 @@ namespace DnsToolWinForms
 
         private async Task AddPolicyAsync()
         {
+            ApplyPolicyServerContext();
             var zoneName = Val(cmbPolicyZoneName);
             var policyName = Val(txtPolicyName);
             var subnetInput = Val(txtPolicySubnetName);
@@ -2886,6 +3211,7 @@ namespace DnsToolWinForms
 
         private async Task RemovePolicyAsync()
         {
+            ApplyPolicyServerContext();
             var zoneName = Val(cmbPolicyZoneName);
             if (lstPolicies.SelectedItem == null || string.IsNullOrEmpty(zoneName))
             {
@@ -2907,6 +3233,79 @@ namespace DnsToolWinForms
             var (_, log) = await Task.Run(() => DnsHelper.Invoke("Remove-DnsServerQueryResolutionPolicy", parameters));
             AppendLog(log);
             FileLogger.LogChange("POLICY DELETE", zoneName, $"Policy={policyName}", WasSuccess(log), log);
+            await RefreshPoliciesAsync();
+        }
+
+        /// <summary>
+        /// Дублирует выбранную политику на другие scope'ы других зон (того же сервера). Диалог
+        /// позволяет отметить сразу несколько scope'ов в нескольких зонах; для каждой пары
+        /// (зона, scope) создаётся отдельная политика с тем же критерием подсети.
+        /// </summary>
+        private async Task DuplicatePolicyAsync()
+        {
+            ApplyPolicyServerContext();
+            var srcZone = Val(cmbPolicyZoneName);
+            var idx = lstPolicies.SelectedIndex;
+            if (string.IsNullOrEmpty(srcZone) || idx < 0 || idx >= _lastPolicies.Count)
+            {
+                AppendLog("Выбери зону и политику в списке - её и будем дублировать.");
+                return;
+            }
+
+            var src = _lastPolicies[idx];
+            var srcSubnets = (src.SubnetDisplay ?? "")
+                .Split(',')
+                .Select(t => t.Trim())
+                .Where(t => t.Length > 0)
+                .ToList();
+
+            var zones = await FetchScopeCapableZoneNamesAsync();
+            var subnets = await FetchClientSubnetNamesAsync();
+
+            var plan = DuplicatePolicyDialog.Show(src.Name, srcZone, srcSubnets, zones, subnets,
+                zone => FetchZoneScopeNamesAsync(zone));
+            if (plan == null || plan.Targets.Count == 0) return;
+
+            if (plan.Subnets.Count == 0)
+            {
+                AppendLog("Для политики нужен хотя бы один критерий-подсеть - дублирование отменено.");
+                return;
+            }
+
+            var clientSubnetValue = "EQ," + string.Join(",", plan.Subnets);
+            int ok = 0, fail = 0;
+
+            foreach (var t in plan.Targets)
+            {
+                // Имя политики уникально В ПРЕДЕЛАХ ЗОНЫ. Если целимся в несколько scope'ов одной
+                // зоны (или в ту же зону, что и оригинал) - к базовому имени добавляем "_<scope>",
+                // иначе в одной зоне было бы две политики с одинаковым именем.
+                var sameZoneCount = plan.Targets.Count(x => x.Zone.Equals(t.Zone, StringComparison.OrdinalIgnoreCase));
+                var needSuffix = !plan.KeepExactName
+                                 || sameZoneCount > 1
+                                 || t.Zone.Equals(srcZone, StringComparison.OrdinalIgnoreCase);
+                var newName = needSuffix ? $"{plan.BaseName}_{t.Scope}" : plan.BaseName;
+
+                var parameters = new Dictionary<string, object>
+                {
+                    ["Name"] = newName,
+                    ["Action"] = "ALLOW",
+                    ["ZoneName"] = t.Zone,
+                    ["ClientSubnet"] = clientSubnetValue,
+                    ["ZoneScope"] = $"{t.Scope},1"
+                };
+
+                AppendLog($"Дублирую '{src.Name}' -> зона '{t.Zone}', scope '{t.Scope}' как политику '{newName}'...");
+                var (_, log) = await Task.Run(() => DnsHelper.Invoke("Add-DnsServerQueryResolutionPolicy", parameters));
+                AppendLog(log);
+                var success = WasSuccess(log);
+                FileLogger.LogChange("POLICY DUPLICATE", t.Zone,
+                    $"Policy={newName} (from {srcZone}/{src.Name}) Subnets=[{string.Join(",", plan.Subnets)}] -> Scope={t.Scope}",
+                    success, success ? null : log);
+                if (success) ok++; else fail++;
+            }
+
+            AppendLog($"Дублирование завершено: создано {ok}, ошибок {fail}.");
             await RefreshPoliciesAsync();
         }
 
@@ -2999,7 +3398,7 @@ namespace DnsToolWinForms
 
         private void AppendLog(string text)
         {
-            if (string.IsNullOrEmpty(text)) return;
+            if (string.IsNullOrEmpty(text) || txtOutput == null) return;
 
             // Лог может содержать сразу несколько строк (например вывод FormatObjects
             // или несколько ОШИБКА:/OK: подряд) - красим каждую отдельно по её содержимому.
@@ -3068,6 +3467,35 @@ namespace DnsToolWinForms
 
             // Служебные сообщения о ходе выполнения ("Загружаю...", "Создаю...", "Удаляю...")
             return Color.DimGray;
+        }
+
+        /// <summary>
+        /// Пишет в "Вывод" одну строку, собранную из фрагментов с разным начертанием
+        /// (имена зон/серверов - жирным и подчёркнутым) - для понятных пояснений вместо
+        /// сырого текста ошибки CIM/WinRM. Тайминг-префикс - как у обычного AppendLog.
+        /// </summary>
+        private void AppendLogStyled(params (string Text, bool Bold, bool Underline)[] parts)
+        {
+            txtOutput.SelectionStart = txtOutput.TextLength;
+            txtOutput.SelectionLength = 0;
+            txtOutput.SelectionColor = Color.DimGray;
+            txtOutput.SelectionFont = new Font(txtOutput.Font, FontStyle.Regular);
+            txtOutput.AppendText($"[{DateTime.Now:HH:mm:ss}] ");
+
+            foreach (var (text, bold, underline) in parts)
+            {
+                var style = FontStyle.Regular;
+                if (bold) style |= FontStyle.Bold;
+                if (underline) style |= FontStyle.Underline;
+                txtOutput.SelectionFont = new Font(txtOutput.Font, style);
+                txtOutput.SelectionColor = Color.DimGray;
+                txtOutput.AppendText(text);
+            }
+
+            txtOutput.SelectionFont = new Font(txtOutput.Font, FontStyle.Regular);
+            txtOutput.SelectionColor = txtOutput.ForeColor;
+            txtOutput.AppendText(Environment.NewLine);
+            txtOutput.ScrollToCaret();
         }
 
         private void AppendColoredLine(string line, Color color)
