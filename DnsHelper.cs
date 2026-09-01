@@ -178,6 +178,9 @@ namespace DnsToolWinForms
             _cimSessions.Remove(key);
         }
 
+        /// <summary>Имена серверов, к которым сейчас жива явная CimSession (успешный логин в этой сессии приложения).</summary>
+        public static IEnumerable<string> ActiveRemoteServers => _cimSessions.Keys.ToArray();
+
         /// <summary>Закрывает вообще все закешированные сессии сразу - вызывать при закрытии приложения.</summary>
         public static void DisposeAllCimSessions()
         {

@@ -1,11 +1,14 @@
+using System.Collections.Generic;
 using System.Drawing;
+using System.Linq;
 using System.Windows.Forms;
 
 namespace DnsToolWinForms
 {
     public static class AddPolicyDialog
     {
-        public static (string Name, string Subnets, string Scope) Show(string zoneHint)
+        public static (string Name, string Subnets, string Scope) Show(string zoneHint,
+            IReadOnlyList<string> availableSubnets = null)
         {
             using var dlg = new Form
             {
@@ -34,9 +37,19 @@ namespace DnsToolWinForms
             var txtName = new TextBox { Location = new Point(140, 44), Width = 260 };
 
             var lblSubnets = new Label { Text = "Подсети:", Location = new Point(16, 84), AutoSize = true };
-            var txtSubnets = new TextBox { Location = new Point(140, 80), Width = 234 };
+            var txtSubnets = new TextBox { Location = new Point(140, 80), Width = 158 };
+            var btnPickSubnets = new Button { Text = "Выбрать…", Location = new Point(302, 79), Size = new Size(72, 24) };
             var hintSubnets = HelpIcon.Create(toolTip, "Одна или несколько подсетей через запятую (логическое ИЛИ). Только имена подсетей, без описания в скобках (то, что в скобках - не часть имени, добавить как есть будет ошибкой).");
             hintSubnets.Location = new Point(380, 82);
+
+            btnPickSubnets.Enabled = availableSubnets != null && availableSubnets.Count > 0;
+            btnPickSubnets.Click += (s, e) =>
+            {
+                var current = txtSubnets.Text.Split(',').Select(t => t.Trim()).Where(t => t.Length > 0);
+                var picked = CheckedListPickerDialog.Show("Выбор подсетей",
+                    "Отметь подсети (сработает по логическому ИЛИ):", availableSubnets, current);
+                if (picked != null) txtSubnets.Text = string.Join(", ", picked);
+            };
 
             var lblScope = new Label { Text = "Scope:", Location = new Point(16, 120), AutoSize = true };
             var txtScope = new TextBox { Location = new Point(140, 116), Width = 260 };
@@ -58,7 +71,7 @@ namespace DnsToolWinForms
 
             dlg.Controls.AddRange(new Control[]
             {
-                lblHint, lblName, txtName, lblSubnets, txtSubnets, hintSubnets, lblScope, txtScope,
+                lblHint, lblName, txtName, lblSubnets, txtSubnets, btnPickSubnets, hintSubnets, lblScope, txtScope,
                 lblReplicationNote, btnCancel, btnCreate
             });
             dlg.AcceptButton = btnCreate;

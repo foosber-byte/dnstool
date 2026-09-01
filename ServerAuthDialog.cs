@@ -25,9 +25,14 @@ namespace DnsToolWinForms
     /// </summary>
     public static class ServerAuthDialog
     {
+        /// <summary>Текст последней ошибки подключения из этого окна (или null при успехе/отмене) - MainForm по нему решает, звать ли RemoteConnectDiagnostics.</summary>
+        public static string LastError { get; private set; }
+
         /// <summary>Возвращает true, если удалось успешно авторизоваться (тогда DnsHelper уже хранит рабочую CimSession).</summary>
         public static bool Show(string server)
         {
+            LastError = null;
+
             using var dlg = new Form
             {
                 Text = "Аутентификация на сервере",
@@ -141,6 +146,8 @@ namespace DnsToolWinForms
                 progress.Visible = false;
 
                 FileLogger.LogChange("AUTH", server, $"пользователь ввёл логин '{login}'", ok, ok ? null : error);
+
+                LastError = ok ? null : error;
 
                 if (ok)
                 {
