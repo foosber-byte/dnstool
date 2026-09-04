@@ -631,7 +631,7 @@ namespace DnsToolWinForms
             "CNAME" => "целевое имя (FQDN), напр. www.example.com",
             "PTR" => "целевое имя (FQDN) для reverse-записи",
             "NS" => "имя сервера (FQDN), напр. ns1.example.com",
-            "MX" => "почтовый сервер (FQDN), напр. mail.example.com — приоритет в поле Priority/Preference",
+            "MX" => "почтовый сервер (FQDN), напр. mail.example.com - приоритет в поле Priority/Preference",
             "TXT" => "текст записи, напр. v=spf1 include:_spf.example.com ~all",
             "SRV" => "целевой хост (Target), напр. sipserver.example.com",
             _ => "IPv4, напр. 10.0.1.10"
