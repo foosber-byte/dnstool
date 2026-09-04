@@ -6,7 +6,7 @@ A WinForms app for managing a Windows DNS Server — covers what `dnsmgmt.msc` d
 records inside a Zone Scope shown as a tree, client subnets, Query Resolution Policies,
 remote management of another server with its own authentication, self-updating from GitHub.
 
-Works through the built-in `DnsServer` PowerShell module. Author: foosber, 2026. v2.7.4.
+Works through the built-in `DnsServer` PowerShell module. Author: foosber, 2026. v2.8.1.
 
 ## Requirements
 

@@ -2320,6 +2320,272 @@ namespace DnsToolWinForms
             }
         }
 
+        /// <summary>
+        /// Обходной путь для удаления записи из scope файловой (Secondary / read-only) зоны,
+        /// когда Remove-DnsServerResourceRecord отказывает с WIN32 9611. Зеркало
+        /// AddRecordToScopeFileAsync: правим .dns-файл scope напрямую и просим DNS Server
+        /// перечитать зону. ВСЕГДА локально (файл лежит на этой машине).
+        ///
+        /// Из файла удаляется ТОЛЬКО строка(и), однозначно совпадающая с выбранной записью
+        /// по имени + типу + значению. Если совпадение не одно (не найдено или найдено
+        /// несколько) - файл не трогается вообще, чтобы случайно не снести чужую запись.
+        /// Возвращает число реально удалённых записей.
+        /// </summary>
+        private async Task<int> DeleteRecordsFromScopeFileAsync(string zoneName, string scopeName, List<PSObject> records)
+        {
+            var filePath = Path.Combine(@"C:\Windows\System32\dns", zoneName, scopeName + ".dns");
+            if (!File.Exists(filePath))
+            {
+                AppendLog($"ОШИБКА: файл scope не найден: {filePath} - проверь имя зоны/scope (регистр важен для пути на диске).");
+                return 0;
+            }
+
+            List<string> lines;
+            try { lines = File.ReadAllLines(filePath).ToList(); }
+            catch (Exception ex) { AppendLog($"ОШИБКА чтения {filePath}: {ex.Message}"); return 0; }
+
+            var toRemove = new SortedSet<int>();
+            var unresolved = new List<string>();
+            foreach (var rec in records)
+            {
+                var label = $"{rec.Properties["HostName"]?.Value} ({rec.Properties["RecordType"]?.Value})";
+                var hits = FindScopeFileRecordLines(lines, zoneName, rec);
+                if (hits == null)
+                    unresolved.Add($"{label}: тип записи не поддерживается файловым удалением");
+                else if (hits.Count == 0)
+                    unresolved.Add($"{label}: подходящая строка в файле не найдена");
+                else if (hits.Count > 1)
+                    unresolved.Add($"{label}: под условие подходит строк: {hits.Count} - удали вручную");
+                else
+                    toRemove.Add(hits[0]);
+            }
+
+            if (unresolved.Count > 0)
+            {
+                AppendLog("Файловое удаление отменено, файл не изменён:" + Environment.NewLine +
+                          "  " + string.Join(Environment.NewLine + "  ", unresolved) + Environment.NewLine +
+                          $"Файл: {filePath}");
+                return 0;
+            }
+
+            string backupPath;
+            try
+            {
+                backupPath = filePath + $".bak_{DateTime.Now:yyyyMMdd_HHmmss}";
+                File.Copy(filePath, backupPath, overwrite: false);
+
+                var kept = lines.Where((_, i) => !toRemove.Contains(i)).ToList();
+                File.WriteAllLines(filePath, kept, new UTF8Encoding(false));
+                AppendLog($"OK: из файла {filePath} удалено строк: {toRemove.Count} (бэкап: {backupPath}).");
+
+                AppendLog($"Перезагружаю зону '{zoneName}' (dnscmd /ZoneReload)...");
+                var reload = RunDnscmdZoneReload(zoneName);
+                AppendLog(reload);
+                var ok = reload.StartsWith("OK");
+
+                foreach (var rec in records)
+                    FileLogger.LogChange("RECORD DELETE (файл)", zoneName,
+                        $"Scope={scopeName} {rec.Properties["RecordType"]?.Value} {rec.Properties["HostName"]?.Value} | файл={filePath}",
+                        ok, ok ? null : reload);
+
+                if (!ok)
+                {
+                    AppendLog($"Зона не перезагрузилась - файл уже изменён, откат из бэкапа: копируй {backupPath} обратно в {filePath} и перезагрузи зону вручную.");
+                    return 0;
+                }
+                return records.Count;
+            }
+            catch (Exception ex)
+            {
+                AppendLog($"ОШИБКА при правке файла/перезагрузке зоны: {ex.Message}");
+                FileLogger.LogChange("RECORD DELETE (файл)", zoneName, $"Scope={scopeName} | файл={filePath}", false, ex.Message);
+                return 0;
+            }
+        }
+
+        /// <summary>
+        /// Ищет в строках .dns-файла scope все строки, соответствующие записи rec
+        /// (имя + тип + значение). Возвращает индексы строк; null - если тип записи
+        /// файловым удалением не поддерживается.
+        /// </summary>
+        private static List<int> FindScopeFileRecordLines(List<string> lines, string zoneName, PSObject rec)
+        {
+            var wantOwner = NormalizeZoneOwner(rec.Properties["HostName"]?.Value?.ToString(), zoneName);
+            var wantType = (rec.Properties["RecordType"]?.Value?.ToString() ?? "").ToUpperInvariant();
+            var wantData = ZoneRdataFromRecord(rec, wantType);
+            if (wantData == null) return null; // тип не поддерживается
+
+            var result = new List<int>();
+            string lastOwner = null;
+            for (int i = 0; i < lines.Count; i++)
+            {
+                var raw = StripZoneFileComment(lines[i]);
+                if (string.IsNullOrWhiteSpace(raw)) continue;
+                if (raw.TrimStart().StartsWith("$")) continue; // $ORIGIN / $TTL / $GENERATE
+
+                var ownerInline = !char.IsWhiteSpace(raw[0]);
+                var tok = TokenizeZoneFileLine(raw);
+                if (tok.Count == 0) continue;
+
+                int idx = 0;
+                string owner;
+                if (ownerInline) { owner = tok[0]; idx = 1; lastOwner = owner; }
+                else owner = lastOwner;
+                if (owner == null) continue;
+
+                // необязательные TTL и CLASS в любом порядке перед типом
+                for (int guard = 0; guard < 2 && idx < tok.Count; guard++)
+                {
+                    if (IsZoneFileTtl(tok[idx]) || IsZoneFileClass(tok[idx])) { idx++; continue; }
+                    break;
+                }
+                if (idx >= tok.Count) continue;
+
+                var type = tok[idx].ToUpperInvariant();
+                idx++;
+                if (type != wantType) continue;
+                if (NormalizeZoneOwner(owner, zoneName) != wantOwner) continue;
+
+                var rdata = string.Join(" ", tok.Skip(idx));
+                if (ZoneRdataFromFile(rdata, type) == wantData) result.Add(i);
+            }
+            return result;
+        }
+
+        private static string StripZoneFileComment(string line)
+        {
+            var inQuotes = false;
+            for (int i = 0; i < line.Length; i++)
+            {
+                var c = line[i];
+                if (c == '"') inQuotes = !inQuotes;
+                else if (c == ';' && !inQuotes) return line.Substring(0, i);
+            }
+            return line;
+        }
+
+        private static List<string> TokenizeZoneFileLine(string line)
+        {
+            var tokens = new List<string>();
+            var sb = new StringBuilder();
+            var inQuotes = false;
+            foreach (var c in line)
+            {
+                if (c == '"') { inQuotes = !inQuotes; sb.Append(c); continue; }
+                if (!inQuotes && (c == ' ' || c == '\t' || c == '(' || c == ')'))
+                {
+                    if (sb.Length > 0) { tokens.Add(sb.ToString()); sb.Clear(); }
+                    continue;
+                }
+                sb.Append(c);
+            }
+            if (sb.Length > 0) tokens.Add(sb.ToString());
+            return tokens;
+        }
+
+        private static bool IsZoneFileClass(string t) =>
+            t.Equals("IN", StringComparison.OrdinalIgnoreCase) ||
+            t.Equals("CH", StringComparison.OrdinalIgnoreCase) ||
+            t.Equals("HS", StringComparison.OrdinalIgnoreCase) ||
+            t.Equals("CS", StringComparison.OrdinalIgnoreCase);
+
+        private static bool IsZoneFileTtl(string t)
+        {
+            if (string.IsNullOrEmpty(t)) return false;
+            int i = 0;
+            while (i < t.Length && char.IsDigit(t[i])) i++;
+            if (i == 0) return false;
+            if (i == t.Length) return true;                       // чистое число секунд
+            return i == t.Length - 1 && "smhdwSMHDW".IndexOf(t[t.Length - 1]) >= 0; // 1h / 30m / 2w
+        }
+
+        /// <summary>Имя владельца записи -> сравнимая форма: "@" для вершины зоны, иначе относительное имя в нижнем регистре без хвостовой точки.</summary>
+        private static string NormalizeZoneOwner(string name, string zone)
+        {
+            if (name == null) return null;
+            name = name.Trim().TrimEnd('.');
+            var z = (zone ?? "").Trim().TrimEnd('.');
+            if (name.Length == 0 || name == "@") return "@";
+            if (z.Length > 0 && name.Equals(z, StringComparison.OrdinalIgnoreCase)) return "@";
+            if (z.Length > 0 && name.EndsWith("." + z, StringComparison.OrdinalIgnoreCase))
+                name = name.Substring(0, name.Length - z.Length - 1);
+            return name.ToLowerInvariant();
+        }
+
+        private static string NormalizeZoneName(string s) => (s ?? "").Trim().TrimEnd('.').ToLowerInvariant();
+
+        private static string NormalizeZoneIp(string s)
+        {
+            s = (s ?? "").Trim();
+            return System.Net.IPAddress.TryParse(s, out var ip) ? ip.ToString() : s.ToLowerInvariant();
+        }
+
+        /// <summary>Значение записи из объекта Get-DnsServerResourceRecord в нормализованную строку. null - тип не поддерживается файловым удалением.</summary>
+        private static string ZoneRdataFromRecord(PSObject rec, string type)
+        {
+            var rd = PSObject.AsPSObject(rec.Properties["RecordData"]?.Value);
+            if (rd == null) return null;
+            string P(string n) => rd.Properties[n]?.Value?.ToString();
+            switch (type)
+            {
+                case "A": return "A " + NormalizeZoneIp(P("IPv4Address"));
+                case "AAAA": return "AAAA " + NormalizeZoneIp(P("IPv6Address"));
+                case "CNAME": return "CNAME " + NormalizeZoneName(P("HostNameAlias"));
+                case "NS": return "NS " + NormalizeZoneName(P("NameServer"));
+                case "PTR": return "PTR " + NormalizeZoneName(P("PtrDomainName"));
+                case "MX": return $"MX {ParseIntOrDefault(P("Preference"), 0)} {NormalizeZoneName(P("MailExchange"))}";
+                case "SRV": return $"SRV {ParseIntOrDefault(P("Priority"), 0)} {ParseIntOrDefault(P("Weight"), 0)} {ParseIntOrDefault(P("Port"), 0)} {NormalizeZoneName(P("DomainName"))}";
+                case "TXT": return "TXT " + NormalizeZoneTxt(rd.Properties["DescriptiveText"]?.Value);
+                default: return null;
+            }
+        }
+
+        /// <summary>То же значение, но разобранное из rdata-части строки .dns-файла.</summary>
+        private static string ZoneRdataFromFile(string rdata, string type)
+        {
+            var p = (rdata ?? "").Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+            switch (type)
+            {
+                case "A": return p.Length >= 1 ? "A " + NormalizeZoneIp(p[0]) : "A ";
+                case "AAAA": return p.Length >= 1 ? "AAAA " + NormalizeZoneIp(p[0]) : "AAAA ";
+                case "CNAME": return p.Length >= 1 ? "CNAME " + NormalizeZoneName(p[0]) : "CNAME ";
+                case "NS": return p.Length >= 1 ? "NS " + NormalizeZoneName(p[0]) : "NS ";
+                case "PTR": return p.Length >= 1 ? "PTR " + NormalizeZoneName(p[0]) : "PTR ";
+                case "MX": return p.Length >= 2 ? $"MX {ParseIntOrDefault(p[0], 0)} {NormalizeZoneName(p[1])}" : null;
+                case "SRV": return p.Length >= 4 ? $"SRV {ParseIntOrDefault(p[0], 0)} {ParseIntOrDefault(p[1], 0)} {ParseIntOrDefault(p[2], 0)} {NormalizeZoneName(p[3])}" : null;
+                case "TXT": return "TXT " + NormalizeZoneTxt(rdata);
+                default: return null;
+            }
+        }
+
+        /// <summary>TXT: и объект записи, и строка файла приводятся к склейке содержимого всех кавычечных сегментов без самих кавычек.</summary>
+        private static string NormalizeZoneTxt(object value)
+        {
+            if (value == null) return "";
+            IEnumerable<string> parts;
+            if (value is string s)
+            {
+                var segs = new List<string>();
+                var sb = new StringBuilder();
+                var inQ = false;
+                foreach (var c in s)
+                {
+                    if (c == '"') { if (inQ) { segs.Add(sb.ToString()); sb.Clear(); } inQ = !inQ; }
+                    else if (inQ) sb.Append(c);
+                }
+                if (segs.Count == 0) segs.Add(s.Trim()); // строка без кавычек - как есть
+                parts = segs;
+            }
+            else if (value is System.Collections.IEnumerable en)
+            {
+                var segs = new List<string>();
+                foreach (var o in en) if (o != null) segs.Add(o.ToString());
+                parts = segs;
+            }
+            else parts = new[] { value.ToString() };
+            return string.Concat(parts);
+        }
+
         private async Task RefreshRecordsAsync()
         {
             var zoneName = Val(cmbScopeZoneName);
@@ -2574,6 +2840,11 @@ namespace DnsToolWinForms
 
             int deleted = 0, failed = 0;
 
+            // Записи, которые обычный API удалить отказался именно из-за типа зоны (WIN32 9611,
+            // read-only / файловая зона) - их добьём правкой .dns-файла scope напрямую (см.
+            // DeleteRecordsFromScopeFileAsync, тот же обходной путь, что и при добавлении).
+            var fileFallback = new List<PSObject>();
+
             // Берём "сырой" объект записи целиком из последнего Get-DnsServerResourceRecord
             // и передаём его в -InputObject - это официальный паттерн удаления конкретной
             // записи (эквивалент "Get-DnsServerResourceRecord ... | Remove-DnsServerResourceRecord").
@@ -2599,13 +2870,45 @@ namespace DnsToolWinForms
                 {
                     deleted++;
                     AppendLog($"OK: запись \"{hostName}\" ({recordType}) {value} удалена из зоны \"{zoneName}\", scope \"{scopeName}\".");
+                    FileLogger.LogChange("RECORD DELETE", zoneName, $"Scope={scopeName} {recordType} {hostName}", true, delLog);
+                }
+                else if (delLog != null && delLog.IndexOf("9611", StringComparison.Ordinal) >= 0)
+                {
+                    fileFallback.Add(record);
+                    AppendLog($"API отказал в удалении \"{hostName}\" ({recordType}) - WIN32 9611 (файловая/read-only зона), попробуем через файл scope.");
                 }
                 else
                 {
                     failed++;
                     AppendLog($"ОШИБКА при удалении \"{hostName}\" ({recordType}): {delLog}");
+                    FileLogger.LogChange("RECORD DELETE", zoneName, $"Scope={scopeName} {recordType} {hostName}", false, delLog);
                 }
-                FileLogger.LogChange("RECORD DELETE", zoneName, $"Scope={scopeName} {recordType} {hostName}", WasSuccess(delLog), delLog);
+            }
+
+            if (fileFallback.Count > 0)
+            {
+                var filePath = Path.Combine(@"C:\Windows\System32\dns", zoneName, scopeName + ".dns");
+                var what = fileFallback.Count == 1 ? "запись" : $"записи ({fileFallback.Count})";
+                var confirm = MessageBox.Show(
+                    $"DNS Server отказал в удалении через API (WIN32 9611: зона файловая / только чтение)." +
+                    $"{Environment.NewLine}{Environment.NewLine}Удалить {what} напрямую из файла scope:{Environment.NewLine}{filePath}{Environment.NewLine}" +
+                    $"на ЭТОЙ машине (локально, независимо от настройки \"Целевой сервер\" сверху), после чего зона будет перезагружена командой dnscmd /ZoneReload." +
+                    $"{Environment.NewLine}{Environment.NewLine}Удалится только строка, точно совпадающая с выбранной записью по имени, типу и значению. " +
+                    $"Перед правкой создаётся резервная копия файла. Если однозначного совпадения нет - файл не трогается." +
+                    $"{Environment.NewLine}{Environment.NewLine}Продолжить?",
+                    "Файловый режим удаления записи", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+
+                if (confirm == DialogResult.Yes)
+                {
+                    var doneViaFile = await DeleteRecordsFromScopeFileAsync(zoneName, scopeName, fileFallback);
+                    deleted += doneViaFile;
+                    failed += fileFallback.Count - doneViaFile;
+                }
+                else
+                {
+                    failed += fileFallback.Count;
+                    AppendLog("Файловое удаление отменено пользователем.");
+                }
             }
 
             if (records.Count > 1) AppendLog($"Удаление завершено: успешно {deleted}, ошибок {failed}.");
