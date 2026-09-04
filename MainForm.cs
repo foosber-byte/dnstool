@@ -131,6 +131,10 @@ namespace DnsToolWinForms
         // деревом/верхней панелью - именно из-за этого "авторизация ОК, а список по кругу").
         private bool _rebuildingPolicyServerCombo;
 
+        // Разовая (за запуск) фоновая проверка новой версии - чтобы не дёргать GitHub повторно,
+        // если Shown сработает ещё раз (форма прячется/показывается).
+        private bool _startupUpdateCheckDone;
+
         public MainForm()
         {
             InitializeComponent();
@@ -143,8 +147,49 @@ namespace DnsToolWinForms
                 await RefreshAllZoneCombosAsync(); // держим внутренний список зон наполненным - используется в подсказках диалогов создания
                 _uiReady = true;
                 RefreshPolicyServerCombo();
+
+                // Не ждём: проверка идёт в фоне, старт и работа с формой не блокируются.
+                _ = CheckForUpdatesInBackgroundAsync();
             };
             FormClosing += (s, e) => DnsHelper.DisposeAllCimSessions();
+        }
+
+        /// <summary>
+        /// Разовая фоновая проверка новой версии при запуске: тихо спрашивает GitHub и, только
+        /// если релиз реально новее текущей версии, предлагает обновиться (тот же путь, что и
+        /// кнопка "Проверить обновления" в окне "О программе"). Ошибки (нет доступа в интернет -
+        /// обычное дело для DNS-серверов в закрытом сегменте сети) наружу не показываются:
+        /// фоновая проверка не должна мешать работе.
+        /// </summary>
+        private async Task CheckForUpdatesInBackgroundAsync()
+        {
+            if (_startupUpdateCheckDone) return;
+            _startupUpdateCheckDone = true;
+
+            try
+            {
+                var (success, _, info) = await UpdateChecker.CheckLatestAsync();
+                if (!success || info == null) return;
+                if (!UpdateChecker.IsNewer(info.Version, AppVersion.Current)) return;
+                if (IsDisposed || Disposing) return;
+
+                var confirm = MessageBox.Show(this,
+                    $"Доступна новая версия: v{info.Version} (у тебя v{AppVersion.Current}).\n\n" +
+                    "Скачать и установить сейчас? Приложение закроется и перезапустится само.\n" +
+                    "changes.log, settings.ini и .dns-файлы зон не трогаются.",
+                    "Доступно обновление", MessageBoxButtons.YesNo, MessageBoxIcon.Information);
+                if (confirm != DialogResult.Yes) return;
+
+                var updaterScript = await UpdateChecker.DownloadAndPrepareUpdateAsync(info.DownloadUrl);
+                FileLogger.LogChange("UPDATE", "GitHub", $"Скачано обновление до v{info.Version}, перезапуск...", true);
+                UpdateChecker.LaunchUpdaterAndExit(updaterScript);
+            }
+            catch (Exception ex)
+            {
+                // Уже после согласия пользователя что-то сорвалось при скачивании/подготовке -
+                // пишем в лог, но без модалки поверх всего (это всё-таки фоновая проверка).
+                FileLogger.LogChange("UPDATE", "GitHub", "Фоновая проверка обновления при запуске", false, ex.Message);
+            }
         }
 
         // ============================================================
