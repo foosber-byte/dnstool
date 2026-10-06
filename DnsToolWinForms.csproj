@@ -25,7 +25,7 @@
     <!-- Версия-счётчик: v2.0 - крупная веха (аутентификация, NS/MX, файловый режим для
          Secondary-зон, фикс многоуровневых имён записей). Дальше мелкие правки идут как
          v2.0.<N> (например v2.0.1), а следующая крупная веха - v2.1 или v3.0. -->
-    <AssemblyTitle>DNS Server Tool v2.8.1</AssemblyTitle>
+    <AssemblyTitle>DNS Server Tool v2.9.0</AssemblyTitle>
     <Description>Инструмент управления DNS-сервером Windows: зоны, Zone Scopes, записи, подсети, политики.</Description>
 
     <!-- Иконка exe (проводник, панель задач, свойства файла). Обязательно положи файл icon.ico
@@ -33,6 +33,14 @@
          ("файл не найден" для Win32-ресурса). -->
     <ApplicationIcon>icon.ico</ApplicationIcon>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Папка тестового проекта вложена в папку проекта - SDK по умолчанию забирает все
+         .cs рекурсивно, поэтому явно исключаем её из компиляции основного приложения. -->
+    <Compile Remove="DnsToolWinForms.Tests\**" />
+    <None Remove="DnsToolWinForms.Tests\**" />
+    <EmbeddedResource Remove="DnsToolWinForms.Tests\**" />
+  </ItemGroup>
 
   <ItemGroup>
     <!-- Reference assemblies для локального Windows PowerShell 5.1 (System.Management.Automation).
