@@ -4,7 +4,6 @@ using System.IO;
 using System.IO.Compression;
 using System.Net.Http;
 using System.Security.Cryptography;
-using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
@@ -19,14 +18,12 @@ namespace DnsToolWinForms
         public string SignatureUrl;
     }
 
-    /// <summary>Подготовленное обновление: где лежит bat-обновлятор и параметры его запуска.</summary>
+    /// <summary>Подготовленное обновление: откуда запускать новый exe и куда его ставить.</summary>
     public class UpdateStaging
     {
-        public string BatPath;
         public string SourceDir;
         public string AppDir;
         public string ExeName;
-        public string TempDir;
     }
 
     /// <summary>
@@ -43,14 +40,11 @@ namespace DnsToolWinForms
     ///
     /// Самообновление устроено так: нельзя перезаписать СВОЙ ЖЕ запущенный exe напрямую
     /// (Windows держит файл заблокированным, пока процесс жив). Поэтому: скачиваем архив
-    /// во временную папку, проверяем подпись, готовим маленький .bat-скрипт, который
-    /// подождёт закрытия текущего процесса, скопирует новые файлы (кроме settings.ini,
-    /// changes.log и .dns-файлов зон - это локальные данные, не часть релиза), перезапустит
-    /// приложение и уберёт за собой временную папку. Bat содержит только ASCII - все пути
-    /// (в том числе с кириллицей) передаются через переменные окружения DSTOOL_UPD_*,
-    /// поэтому кодовая страница bat-файла не может испортить пути. Каждый шаг пишется в
-    /// update.log; при ошибке копирования временная папка НЕ удаляется - лог и скачанный
-    /// архив остаются для диагностики.
+    /// во временную папку, проверяем подпись, распаковываем и запускаем НОВЫЙ exe с ключом
+    /// --apply-update - он сам (UpdateApplier, чистый C#, без cmd/bat) дождётся закрытия
+    /// старого процесса, скопирует файлы поверх установки (кроме settings.ini, changes.log
+    /// и .dns-файлов зон - это локальные данные, не часть релиза), запишет update.log,
+    /// перезапустит приложение и удалит временную папку.
     /// </summary>
     public static class UpdateChecker
     {
@@ -96,7 +90,7 @@ namespace DnsToolWinForms
         }
 
         /// <summary>
-        /// Скачивает архив и подпись, проверяет подпись, распаковывает и готовит bat-обновлятор.
+        /// Скачивает архив и подпись, проверяет подпись, распаковывает во временную папку.
         /// Возвращает подготовленное обновление - его нужно запустить через LaunchUpdaterAndExit().
         /// </summary>
         public static async Task<UpdateStaging> DownloadAndPrepareUpdateAsync(UpdateInfo info)
@@ -143,58 +137,12 @@ namespace DnsToolWinForms
 
             var appDir = AppDomain.CurrentDomain.BaseDirectory.TrimEnd('\\');
             var exeName = Path.GetFileName(System.Reflection.Assembly.GetExecutingAssembly().Location);
-            var updaterScript = Path.Combine(tempDir, "update.bat");
-
-            // /XF исключает локальные файлы - именно они НЕ должны быть тронуты обновлением.
-            // Ожидание закрытия процесса - опрос tasklist (до 30 циклов по ~1 с), пауза через
-            // ping (работает в любом скрытом cmd, в отличие от timeout). Коды robocopy >= 8 -
-            // ошибка копирования: логируем, врем папку не трогаем, но приложение всё равно
-            // запускаем (старым exe), чтобы пользователь не остался с закрытым окном.
-            var scriptLines = new[]
-            {
-                "@echo off",
-                "setlocal enableextensions",
-                "if \"%DSTOOL_UPD_TMP%\"==\"\" exit /b 1",
-                "set \"SRC=%DSTOOL_UPD_SRC%\"",
-                "set \"APPDIR=%DSTOOL_UPD_APP%\"",
-                "set \"EXE=%DSTOOL_UPD_EXE%\"",
-                "set \"TMPDIR=%DSTOOL_UPD_TMP%\"",
-                "set \"LOG=%TMPDIR%\\update.log\"",
-                ">>\"%LOG%\" echo [%date% %time%] updater started",
-                "set RETRIES=0",
-                ":waitloop",
-                "tasklist /FI \"IMAGENAME eq %EXE%\" 2>NUL | find /I \"%EXE%\" >NUL",
-                "if errorlevel 1 goto docopy",
-                "set /a RETRIES+=1",
-                "if %RETRIES% GEQ 30 goto docopy",
-                "ping -n 2 127.0.0.1 >NUL",
-                "goto waitloop",
-                ":docopy",
-                ">>\"%LOG%\" echo [%date% %time%] app process closed after %RETRIES% wait cycles",
-                "robocopy \"%SRC%\" \"%APPDIR%\" /E /XF settings.ini changes.log changes.log.bak_* *.dns *.dns.bak_* /NFL /NDL /NJH /NJS /R:10 /W:1",
-                "set RC=%ERRORLEVEL%",
-                "rem редирект перед echo: иначе \"code 3>>\" парсится как дескриптор 3>>, и строка теряется",
-                ">>\"%LOG%\" echo [%date% %time%] robocopy exit code %RC%",
-                "if %RC% LSS 8 goto launch",
-                ">>\"%LOG%\" echo [%date% %time%] UPDATE FAILED: robocopy %RC%, temp folder kept for diagnostics",
-                "start \"\" \"%APPDIR%\\%EXE%\"",
-                "exit /b %RC%",
-                ":launch",
-                ">>\"%LOG%\" echo [%date% %time%] update OK, relaunching",
-                "start \"\" \"%APPDIR%\\%EXE%\"",
-                "copy /Y \"%LOG%\" \"%APPDIR%\\update.log\" >NUL 2>&1",
-                "rmdir /S /Q \"%TMPDIR%\"",
-                "exit /b 0"
-            };
-            File.WriteAllLines(updaterScript, scriptLines, Encoding.ASCII);
 
             return new UpdateStaging
             {
-                BatPath = updaterScript,
                 SourceDir = sourceDir,
                 AppDir = appDir,
-                ExeName = exeName,
-                TempDir = tempDir
+                ExeName = exeName
             };
         }
 
@@ -213,25 +161,22 @@ namespace DnsToolWinForms
         }
 
         /// <summary>
-        /// Запускает bat-обновлятор и завершает текущий процесс - файл exe освобождается.
+        /// Запускает НОВЫЙ exe в режиме применения обновления (UpdateApplier.ApplyArgs:
+        /// "--apply-update &lt;папка&gt; &lt;pid&gt;") и завершает текущий процесс - файл exe освобождается.
         /// Application.Exit() может не убить процесс (открытая модальная форма, зависший
         /// обработчик закрытия): тогда процесс живёт дальше, держит exe заблокированным, и
-        /// robocopy не может его заменить. Поэтому через 5 секунд процесс завершается
+        /// копирование не сможет его заменить. Поэтому через 5 секунд процесс завершается
         /// принудительно - это страховка, в норме приложение закрывается сразу.
         /// </summary>
         public static void LaunchUpdaterAndExit(UpdateStaging staging)
         {
-            var psi = new ProcessStartInfo
+            var exePath = Path.Combine(staging.SourceDir, staging.ExeName);
+            var psi = new ProcessStartInfo(exePath)
             {
-                FileName = "cmd.exe",
-                Arguments = "/c \"\"" + staging.BatPath + "\"\"",
-                UseShellExecute = false,
-                CreateNoWindow = true
+                Arguments = UpdateApplier.ArgPrefix + " \"" + staging.AppDir + "\" " + Process.GetCurrentProcess().Id,
+                UseShellExecute = true,
+                WorkingDirectory = staging.SourceDir
             };
-            psi.EnvironmentVariables["DSTOOL_UPD_SRC"] = staging.SourceDir;
-            psi.EnvironmentVariables["DSTOOL_UPD_APP"] = staging.AppDir;
-            psi.EnvironmentVariables["DSTOOL_UPD_EXE"] = staging.ExeName;
-            psi.EnvironmentVariables["DSTOOL_UPD_TMP"] = staging.TempDir;
             Process.Start(psi);
             Application.Exit();
             Task.Run(() =>

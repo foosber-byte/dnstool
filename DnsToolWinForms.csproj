@@ -25,7 +25,7 @@
     <!-- Версия-счётчик: v2.0 - крупная веха (аутентификация, NS/MX, файловый режим для
          Secondary-зон, фикс многоуровневых имён записей). Дальше мелкие правки идут как
          v2.0.<N> (например v2.0.1), а следующая крупная веха - v2.1 или v3.0. -->
-    <AssemblyTitle>DNS Server Tool v2.9.1</AssemblyTitle>
+    <AssemblyTitle>DNS Server Tool v2.9.2</AssemblyTitle>
     <Description>Инструмент управления DNS-сервером Windows: зоны, Zone Scopes, записи, подсети, политики.</Description>
 
     <!-- Иконка exe (проводник, панель задач, свойства файла). Обязательно положи файл icon.ico
@@ -80,5 +80,13 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
   </ItemGroup>
+
+  <!-- Автоматическая упаковка и подпись релиза: dotnet publish -c Release сам создаёт рядом
+       с файлами публикации готовые DNS.Server.Tool_vX.Y.Z_x64.zip и .zip.sig (клиенты v2.9.2+
+       принимают обновления ТОЛЬКО с подписью). Ручных шагов больше нет; приватный ключ лежит
+       вне репозитория у владельца (%USERPROFILE%\.dnstool\release-key-private.xml). -->
+  <Target Name="MakeSignedRelease" AfterTargets="Publish" Condition="'$(Configuration)' == 'Release'">
+    <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\tools\make-release.ps1&quot; -PublishDir &quot;$([System.IO.Path]::TrimEndingDirectorySeparator('$(PublishDir)'))&quot;" />
+  </Target>
 
 </Project>
