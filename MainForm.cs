@@ -97,9 +97,9 @@ namespace DnsToolWinForms
                     "Доступно обновление", MessageBoxButtons.YesNo, MessageBoxIcon.Information);
                 if (confirm != DialogResult.Yes) return;
 
-                var updaterScript = await UpdateChecker.DownloadAndPrepareUpdateAsync(info.DownloadUrl);
-                FileLogger.LogChange("UPDATE", "GitHub", $"Скачано обновление до v{info.Version}, перезапуск...", true);
-                UpdateChecker.LaunchUpdaterAndExit(updaterScript);
+                var staging = await UpdateChecker.DownloadAndPrepareUpdateAsync(info);
+                FileLogger.LogChange("UPDATE", "GitHub", $"Скачано и проверено обновление до v{info.Version}, перезапуск...", true);
+                UpdateChecker.LaunchUpdaterAndExit(staging);
             }
             catch (Exception ex)
             {

@@ -151,15 +151,15 @@ namespace DnsToolWinForms
                     lblUpdateStatus.ForeColor = Color.DimGray;
                     lblUpdateStatus.Text = "Скачиваю и распаковываю обновление...";
 
-                    var updaterScript = await UpdateChecker.DownloadAndPrepareUpdateAsync(info.DownloadUrl);
+                    var staging = await UpdateChecker.DownloadAndPrepareUpdateAsync(info);
 
-                    FileLogger.LogChange("UPDATE", "GitHub", $"Скачано обновление до v{info.Version}, перезапуск...", true);
+                    FileLogger.LogChange("UPDATE", "GitHub", $"Скачано и проверено обновление до v{info.Version}, перезапуск...", true);
 
                     lblUpdateStatus.ForeColor = Color.SeaGreen;
                     lblUpdateStatus.Text = "Готово. Приложение сейчас перезапустится...";
                     await Task.Delay(800);
 
-                    UpdateChecker.LaunchUpdaterAndExit(updaterScript);
+                    UpdateChecker.LaunchUpdaterAndExit(staging);
                 }
                 catch (Exception ex)
                 {
