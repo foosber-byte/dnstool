@@ -51,7 +51,7 @@ namespace DnsToolWinForms
         private const string ApiUrl = "https://api.github.com/repos/foosber-byte/dnstool/releases/latest";
 
         // Публичный ключ проверки подписи релизных zip (парный приватный - вне репозитория).
-        private const string PublicKeyXml = "<RSAKeyValue><Modulus>ko+zvLv76eL8WqD3zhTYFUtkfjoa50l1d+Qi9VnQXGIGKFe1fxZ5vq3PerPzx7lA/eYWsK7TPnQnbPpDymsRDaR3/nw3JuNgi57xR7z8XpRtCAuByy1w+kkUv0O8Jhgh3pzFKG3UWpNkLXqOT0qfOQmVk0S8fCBgFrrhZqYb07wkrRhPcPSw9XoJr1uGI2Mz0gEk6MLrKNMbm1Kg+OJ1KBtltYkcD4CBcgVQ6t8fO1Lfdgd4l1sE1cRgmO1vG9jHo11/Dxlwlo4KYXly+BIJN5uvndtbygmf1x7d3PVgUYGfCq7eruIMZYzVhZZJR22y2KqFUW/lGbKhOiafzlsMiQ==</Modulus><Exponent>AQAB</Exponent></RSAKeyValue>";
+        private const string PublicKeyXml = "<RSAKeyValue><Modulus>zTcdunizXgC73eNP6W1pofGoUr0LHxGjg8pXjoakclCaleIfnc3GNi50cClrTx1nOQRnBgxnIKXWn6EINJ2nc1lDbg2STxkGncXWm3ChGx11OyB1yP0MaIp34s2n5wLyHPY9XGnJjhJyOJE0Vewg+XEtPXybXGuwj7oAHisBOvlhkZmy3uD8ZMF30VVvs1LthogcwhWcaGiaQXHKRm2W8umusPCU/g9YmWAGkxwDL341p24hFix0nU29DbZU1jTmrOIx1G27NExpB9XUaitjNcD1QmqoW52QkSdcri94OWETxiKjtj0pEzAfQzCeaO7kriUxQqiggCFeg4MDwHxJZQGdmOZJpCO/yg0vml56yeCqP9X5wfECe7vsopeU1atQB2jqGf+p9bNaJKWQ61rhcmHdel4QF75d9xN1J2O87wO5v0Go2BxrkYAYbyygi6MEr+Z01tOAs39dfIpwHlsXJV3vOsYBHIRLx2ZJIXVHtBm2hixxh58gWWP6C1CE5O3jYUL0EKY6JpCbM9Q5Uca67S9bXivYRKW3Vr9ja1uTC3QJya4UMqx02Dfkxx7tIcltWe0mdxVuuXkeJOODxOxlGTW/PywqROF3XC1etInMJYSklZgU7s6bSdDpgTIeg7lk3r4/hx88L+Rlswq7CXnp+FNykr3bb7PZCQkomvjs/9k=</Modulus><Exponent>AQAB</Exponent></RSAKeyValue>";
 
         public static async Task<(bool Success, string Error, UpdateInfo Info)> CheckLatestAsync()
         {
