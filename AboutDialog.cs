@@ -102,8 +102,9 @@ namespace DnsToolWinForms
             var lblUpdateStatus = new Label
             {
                 Location = new Point(24, y + 36),
-                Size = new Size(432, 40),
+                Size = new Size(432, 64),
                 TextAlign = ContentAlignment.TopCenter,
+                AutoEllipsis = false,
                 Font = new Font("Segoe UI", 8.5F),
                 ForeColor = Color.DimGray,
                 Text = ""
@@ -173,7 +174,7 @@ namespace DnsToolWinForms
             btnUpdate.Click += CheckForUpdate;
             dlg.Controls.Add(btnUpdate);
             dlg.Controls.Add(lblUpdateStatus);
-            y += 84;
+            y += 108;
 
             var btnClose = new Button
             {

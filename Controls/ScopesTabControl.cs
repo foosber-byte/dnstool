@@ -36,6 +36,8 @@ namespace DnsToolWinForms.Controls
         private TextBox txtSrvPriority;
         private TextBox txtSrvWeight;
         private TextBox txtSrvPort;
+        private Button btnAddRecord;       // прямой ввод - доступен только для Primary (Secondary/Stub read-only)
+        private Button btnAddRecordFile;   // файловый обходной путь - имеет смысл только для Secondary/Stub
         private ListBox lstRecords;
         private List<PSObject> _lastScopeRecords = new List<PSObject>(); // сырые данные с сервера, без сортировки/фильтра
         private List<PSObject> _displayedRecords = new List<PSObject>(); // 1:1 с текущими строками lstRecords - null для строк-папок
@@ -358,7 +360,7 @@ namespace DnsToolWinForms.Controls
             txtSrvWeight = Tb(50, "10");
             txtSrvPort = Tb(50, "443");
 
-            var btnAddRecord = IconFactory.CreateButton(IconFactory.Add(), "Добавить запись в текущую папку...", _toolTip, async (s, e) =>
+            btnAddRecord = IconFactory.CreateButton(IconFactory.Add(), "Добавить запись в текущую папку...", _toolTip, async (s, e) =>
             {
                 var result = RecordEditDialog.Show("A", "", "", "10", "10", "443", isNew: true);
                 if (result == null) return; // отмена
@@ -383,7 +385,7 @@ namespace DnsToolWinForms.Controls
             // зоны либо не подхватится, либо создаст рассинхрон между этим сервером и AD.
             // Файловый режим имеет смысл только для настоящих Secondary/read-only зон, где
             // .dns-файл - единственное, что реально есть на этой машине.
-            var btnAddRecordFile = IconFactory.CreateButton(IconFactory.Notepad(), "Добавить запись в файл (обходной путь для Secondary-зон)...", _toolTip, async (s, e) =>
+            btnAddRecordFile = IconFactory.CreateButton(IconFactory.Notepad(), "Добавить запись в файл (обходной путь для Secondary-зон)...", _toolTip, async (s, e) =>
             {
                 var confirmInfo = MessageBox.Show(
                     "Это обходной путь для Secondary/read-only зон: строка будет дописана НАПРЯМУЮ " +
@@ -600,12 +602,14 @@ namespace DnsToolWinForms.Controls
             var z = results.FirstOrDefault();
             if (z == null)
             {
+                UpdateAddRecordButtons(null);
                 AppendStyled(lblZoneSource, "Источник", underline: true);
                 lblZoneSource.AppendText(": -");
                 return;
             }
 
             var zoneType = z.Properties["ZoneType"]?.Value?.ToString() ?? "?";
+            UpdateAddRecordButtons(zoneType);
 
             if (zoneType == "Primary")
             {
@@ -644,6 +648,23 @@ namespace DnsToolWinForms.Controls
                     AppendStyled(lblZoneSource, masters, bold: true);
                 }
             }
+        }
+
+        /// <summary>
+        /// Доступность кнопок добавления записей по типу выбранной зоны: у Secondary/Stub зона
+        /// read-only через обычный API (WIN32 9611) - доступен только файловый обходной путь;
+        /// у Primary (в т.ч. AD-интегрированной) файловая правка бессмысленна и опасна - доступен
+        /// только прямой ввод. Тип неизвестен (зона не выбрана / не отвечает) - обе включены.
+        /// </summary>
+        private void UpdateAddRecordButtons(string zoneType)
+        {
+            if (btnAddRecord == null || btnAddRecordFile == null) return;
+            var t = (zoneType ?? "").Trim();
+            var isReadOnly = t.Equals("Secondary", StringComparison.OrdinalIgnoreCase)
+                || t.Equals("Stub", StringComparison.OrdinalIgnoreCase);
+            var isPrimary = t.Equals("Primary", StringComparison.OrdinalIgnoreCase);
+            btnAddRecord.Enabled = !isReadOnly;
+            btnAddRecordFile.Enabled = !isPrimary;
         }
 
         /// <summary>Экспортирует имена зон ТЕКУЩЕГО (уже развёрнутого) сервера в файл - обе категории, прямые и обратные вместе.</summary>
