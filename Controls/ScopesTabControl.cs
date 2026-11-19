@@ -13,6 +13,68 @@ using static DnsToolWinForms.Services.DnsRecordService;
 namespace DnsToolWinForms.Controls
 {
     /// <summary>
+    /// ListView со списком записей: Details-режим с именованными колонками. Двойной клик по
+    /// разделителю заголовка - автоподбор ширины колонки по содержимому (как в проводнике),
+    /// обычное перетаскивание границы работает штатно.
+    /// </summary>
+    internal sealed class RecordListView : ListView
+    {
+        private const int WmLButtonDblClk = 0x0203;
+        private const int LvmGetHeader = 0x101F;
+        private const int HdmHitTest = 0x0006;
+        private const int HhtOnDivider = 0x0004;
+
+        [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+        private struct POINT { public int x; public int y; }
+
+        [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+        private struct HDHITTESTINFO
+        {
+            public POINT pt;
+            public uint flags;
+            public int iItem;
+        }
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
+
+        protected override void WndProc(ref Message m)
+        {
+            if (m.Msg == WmLButtonDblClk && View == View.Details && Columns.Count > 0)
+            {
+                var p = PointToClient(Cursor.Position);
+                var headerHeight = Font.Height + 8; // полоса заголовка: высота текста + отступы
+                if (p.Y <= headerHeight)
+                {
+                    var header = SendMessage(Handle, LvmGetHeader, IntPtr.Zero, IntPtr.Zero);
+                    if (header != IntPtr.Zero)
+                    {
+                        var hit = new HDHITTESTINFO
+                        {
+                            pt = new POINT { x = p.X, y = p.Y }
+                        };
+                        var hStruct = System.Runtime.InteropServices.Marshal.AllocHGlobal(System.Runtime.InteropServices.Marshal.SizeOf<HDHITTESTINFO>());
+                        try
+                        {
+                            System.Runtime.InteropServices.Marshal.StructureToPtr(hit, hStruct, false);
+                            SendMessage(header, HdmHitTest, IntPtr.Zero, hStruct);
+                            hit = System.Runtime.InteropServices.Marshal.PtrToStructure<HDHITTESTINFO>(hStruct);
+                        }
+                        finally { System.Runtime.InteropServices.Marshal.FreeHGlobal(hStruct); }
+
+                        if ((hit.flags & HhtOnDivider) != 0 && hit.iItem >= 0 && hit.iItem < Columns.Count)
+                        {
+                            Columns[hit.iItem].Width = -2; // автоподбор по содержимому
+                            return;
+                        }
+                    }
+                }
+            }
+            base.WndProc(ref m);
+        }
+    }
+
+    /// <summary>
     /// Вкладка "Scopes и записи": дерево серверы->зоны->scopes->папки, список записей с
     /// фильтром/сортировкой, управление зонами и scopes, добавление/редактирование/удаление
     /// записей (включая файловый обходной путь для Secondary-зон) и импорт из файла.
@@ -39,7 +101,8 @@ namespace DnsToolWinForms.Controls
         private TextBox txtRecordTtl;
         private Button btnAddRecord;       // прямой ввод - доступен только для Primary (Secondary/Stub read-only)
         private Button btnAddRecordFile;   // файловый обходной путь - имеет смысл только для Secondary/Stub
-        private ListBox lstRecords;
+        private ListView lstRecords;
+        private ColumnHeader colRecName, colRecType, colRecValue, colRecTtl;
         private List<PSObject> _lastScopeRecords = new List<PSObject>(); // сырые данные с сервера, без сортировки/фильтра
         private List<PSObject> _displayedRecords = new List<PSObject>(); // 1:1 с текущими строками lstRecords - null для строк-папок
         private List<RecordTreeNode> _displayedFolders = new List<RecordTreeNode>(); // 1:1 с текущими строками lstRecords - null для строк-записей
@@ -171,7 +234,18 @@ namespace DnsToolWinForms.Controls
 
         private void BuildUi()
         {
-            lstRecords = new ListBox { SelectionMode = SelectionMode.MultiExtended };
+            lstRecords = new RecordListView
+            {
+                View = View.Details,
+                FullRowSelect = true,
+                MultiSelect = true,
+                HideSelection = true,
+                HeaderStyle = ColumnHeaderStyle.Nonclickable
+            };
+            colRecName = lstRecords.Columns.Add("Имя", 190);
+            colRecType = lstRecords.Columns.Add("Тип", 70);
+            colRecValue = lstRecords.Columns.Add("Значение", 320);
+            colRecTtl = lstRecords.Columns.Add("TTL", 90);
 
             // Дерево записей: верхний уровень - scope'ы зоны, внутри каждого - папки записей
             // (группировка по составным именам, как в dnsmgmt.msc). Scope подгружается ЛЕНИВО -
@@ -292,12 +366,15 @@ namespace DnsToolWinForms.Controls
             {
                 if (e.Button == MouseButtons.Right)
                 {
-                    var idx = lstRecords.IndexFromPoint(e.Location);
+                    var idx = lstRecords.HitTest(e.Location).Item?.Index ?? -1;
                     // Клик ВНУТРИ уже выделенной группы - сохраняем всё выделение (как в
                     // проводнике), иначе множественный выбор было бы бессмысленно заводить -
                     // правый клик тут же сбрасывал бы его до одной строки под курсором.
                     if (idx >= 0 && !lstRecords.SelectedIndices.Contains(idx))
-                        lstRecords.SelectedIndex = idx;
+                    {
+                        lstRecords.SelectedIndices.Clear();
+                        lstRecords.SelectedIndices.Add(idx);
+                    }
                 }
             };
             lstRecords.ContextMenuStrip = recordsContextMenu;
@@ -440,7 +517,7 @@ namespace DnsToolWinForms.Controls
             };
 
             var btnExportRecords = IconFactory.CreateButton(IconFactory.Export(), "Экспорт в файл...", _toolTip,
-                (s, e) => ExportListToFile(lstRecords.Items.Cast<string>(),
+                (s, e) => ExportListToFile(lstRecords.Items.Cast<ListViewItem>().Select(i => (string)i.Tag),
                     $"records_{Val(txtRecordScopeName)}_{SanitizeForFileName(CurrentServerLabel())}_{DateTime.Now:yyyyMMdd_HHmmss}.txt",
                     $"Экспортировано {DateTime.Now:yyyy-MM-dd HH:mm:ss} с сервера: {CurrentServerLabel()} | Зона: {Val(cmbScopeZoneName)} | Scope: {Val(txtRecordScopeName)}"));
 
@@ -465,7 +542,6 @@ namespace DnsToolWinForms.Controls
 
             lstRecords.Dock = DockStyle.Fill;
             lstRecords.Font = new Font("Consolas", 9F);
-            lstRecords.HorizontalScrollbar = true;
             var recordsWrapper = new Panel { Dock = DockStyle.Fill };
             recordsWrapper.Controls.Add(lstRecords);
             recordsWrapper.Controls.Add(recordsFilterRow);
@@ -1970,10 +2046,30 @@ namespace DnsToolWinForms.Controls
 
             foreach (var r in ordered.ToList())
             {
-                lstRecords.Items.Add(r.display);
+                ListViewItem item;
+                if (r.isFolder)
+                {
+                    // Папка: имя в первой колонке, счётчик - во второй. Legacy-строка в Tag -
+                    // для экспорта в текстовый формат, который умеет читать импорт.
+                    item = new ListViewItem(new[] { "[FLDR] " + r.name, r.value + " запис.", "", "" });
+                    item.Tag = $"[FLDR] {r.name,-26} {r.value} запис.";
+                    item.ForeColor = SystemColors.GrayText;
+                }
+                else
+                {
+                    var ttlSeconds = GetRecordTtlSeconds(r.record);
+                    var ttlText = ttlSeconds.HasValue ? DnsRecordService.FormatTtl(ttlSeconds.Value) : "";
+                    item = new ListViewItem(new[] { r.name, r.type, r.value, ttlText });
+                    item.Tag = FormatRecordRow(r.name, r.type, r.value, ttlSeconds);
+                }
+                lstRecords.Items.Add(item);
                 _displayedRecords.Add(r.record);
                 _displayedFolders.Add(r.folder);
             }
+
+            // Колонка TTL показывается только когда в текущем наборе есть записи с
+            // нестандартным TTL - иначе она пустая и только занимает место.
+            colRecTtl.Width = lstRecords.Items.Cast<ListViewItem>().Any(i => i.SubItems[3].Text.Length > 0) ? -1 : 0;
         }
 
         private async Task RemoveRecordAsync()
@@ -2102,7 +2198,7 @@ namespace DnsToolWinForms.Controls
         {
             var zoneName = Val(cmbScopeZoneName);
             var scopeName = Val(txtRecordScopeName);
-            var index = lstRecords.SelectedIndex;
+            var index = lstRecords.SelectedIndices.Count > 0 ? lstRecords.SelectedIndices[0] : -1;
 
             if (string.IsNullOrEmpty(zoneName) || string.IsNullOrEmpty(scopeName))
             {
@@ -2281,7 +2377,7 @@ namespace DnsToolWinForms.Controls
         /// <summary>Открывает окно проверки записи (nslookup / Resolve-DnsName) для выбранной строки.</summary>
         private void CheckSelectedRecord()
         {
-            var index = lstRecords.SelectedIndex;
+            var index = lstRecords.SelectedIndices.Count > 0 ? lstRecords.SelectedIndices[0] : -1;
             if (index >= 0 && index < _displayedRecords.Count && _displayedRecords[index] == null)
             {
                 AppendLog("Это папка (группировка по имени), а не запись - для проверки зайди внутрь и выбери саму запись.");

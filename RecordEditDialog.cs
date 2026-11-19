@@ -76,13 +76,14 @@ namespace DnsToolWinForms
             hintSrv.Location = new Point(16, 160);
 
             // TTL записи - как в расширенных свойствах оснастки DNS, где по умолчанию 1 час
-            // ("1:00:00"). Пусто = zone default. Принимаются форматы "чч:мм:сс"/"мм:сс" и секунды.
-            var lblTtl = new Label { Text = "TTL (сек / чч:мм:сс / д.чч:мм:сс):", Location = new Point(16, 186), AutoSize = true };
-            var txtTtl = new TextBox { Location = new Point(140, 182), Width = 120, Text = string.IsNullOrWhiteSpace(currentTtl) ? "01:00:00" : currentTtl };
+            // ("1:00:00"). Пусто = zone default. Форматы перечислены в подсказке рядом.
+            var lblTtl = new Label { Text = "TTL:", Location = new Point(16, 186), AutoSize = true };
+            var txtTtl = new TextBox { Location = new Point(56, 182), Width = 150, Text = string.IsNullOrWhiteSpace(currentTtl) ? "01:00:00" : currentTtl };
             var hintTtl = HelpIcon.Create(toolTip,
                 "Время жизни записи (как в расширенных свойствах оснастки DNS, по умолчанию 1 час). " +
-                "Форматы: \"чч:мм:сс\", \"мм:сс\" или секунды. Оставь как есть, если не уверен.");
-            hintTtl.Location = new Point(270, 184);
+                "Форматы: \"3600\" (секунды), \"чч:мм:сс\", \"2д\" или \"2.01:00:00\" (дни). " +
+                "Оставь как есть, если не уверен.");
+            hintTtl.Location = new Point(214, 184);
 
             // Поля Priority/Weight/Port нужны только для SRV и MX - показываем их только тогда,
             // когда выбран подходящий тип, а не всегда (для A/AAAA/CNAME и т.п. они бы просто
