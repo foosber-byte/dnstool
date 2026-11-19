@@ -1472,6 +1472,34 @@ namespace DnsToolWinForms.Controls
         }
 
         /// <summary>
+        /// Кандидаты расположения .dns-файла named Zone Scope на диске. Встречаются ОБЕ раскладки:
+        /// плоская "System32\dns\<scope>.<зона>.dns" и в подпапке зоны "System32\dns\<зона>\<scope>.dns"
+        /// (какой вариант создаст DNS Server - зависит от версии/конфигурации). Порядок не важен:
+        /// выбираем тот, который реально существует.
+        /// </summary>
+        private static List<string> ScopeFilePathCandidates(string zoneName, string scopeName)
+        {
+            var dnsRoot = @"C:\Windows\System32\dns";
+            return new List<string>
+            {
+                Path.Combine(dnsRoot, $"{scopeName}.{zoneName}.dns"),          // плоская раскладка
+                Path.Combine(dnsRoot, zoneName, $"{scopeName}.dns"),           // подпапка зоны
+                Path.Combine(dnsRoot, zoneName, $"{scopeName}.{zoneName}.dns") // подпапка зоны + полное имя
+            };
+        }
+
+        /// <summary>
+        /// Возвращает реально существующий .dns-файл scope (первый найденный из кандидатов)
+        /// или null, если ни один не найден.
+        /// </summary>
+        private static string FindScopeFilePath(string zoneName, string scopeName)
+        {
+            foreach (var path in ScopeFilePathCandidates(zoneName, scopeName))
+                if (File.Exists(path)) return path;
+            return null;
+        }
+
+        /// <summary>
         /// Обходной путь для случаев, когда обычный API (Add-DnsServerResourceRecord*)
         /// отказывает с WIN32 9611 "Недопустимый тип зоны DNS" - у настоящих Secondary/read-only
         /// зон, где .dns-файл на диске - единственное, что реально есть на этой машине.
@@ -1507,11 +1535,15 @@ namespace DnsToolWinForms.Controls
                 return;
             }
 
-            // Файл scope лежит ПЛОСКО прямо в System32\dns, без подпапки по имени зоны -
-            // имя файла "<scope>.<zone>.dns" (например "nat.delo-group.ru.dns"), не
-            // "<zone>\<scope>.dns" (проверено на реальном сервере: подпапки с именем зоны
-            // для scope-файлов не существует, туда попадают отдельные .dns файлы САМИХ зон).
-            var filePath = Path.Combine(@"C:\Windows\System32\dns", $"{scopeName}.{zoneName}.dns");
+            // Файл scope ищем среди известных раскладок (плоская и в подпапке зоны) - см.
+            // комментарий у ScopeFilePathCandidates.
+            var filePath = FindScopeFilePath(zoneName, scopeName);
+            if (filePath == null)
+            {
+                AppendLog("ОШИБКА: файл scope не найден ни по одному из известных путей:" + Environment.NewLine +
+                          "  " + string.Join(Environment.NewLine + "  ", ScopeFilePathCandidates(zoneName, scopeName)));
+                return;
+            }
 
             var confirm = MessageBox.Show(
                 "Это обходной путь для Secondary/read-only зон: строка допишется НАПРЯМУЮ в файл" +
@@ -1528,12 +1560,6 @@ namespace DnsToolWinForms.Controls
                 $"{Environment.NewLine}{Environment.NewLine}Продолжить?",
                 "Файловый режим добавления записи", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
             if (confirm != DialogResult.Yes) return;
-
-            if (!File.Exists(filePath))
-            {
-                AppendLog($"ОШИБКА: файл scope не найден: {filePath} - проверь имя зоны/scope (регистр важен для пути на диске).");
-                return;
-            }
 
             string line;
             switch (type)
@@ -1623,12 +1649,12 @@ namespace DnsToolWinForms.Controls
         /// </summary>
         private async Task<int> DeleteRecordsFromScopeFileAsync(string zoneName, string scopeName, List<PSObject> records)
         {
-            // См. комментарий у AddRecordToScopeFileAsync - файл scope лежит ПЛОСКО прямо в
-            // System32\dns, имя "<scope>.<zone>.dns", без подпапки по имени зоны.
-            var filePath = Path.Combine(@"C:\Windows\System32\dns", $"{scopeName}.{zoneName}.dns");
-            if (!File.Exists(filePath))
+            // Файл scope ищем среди известных раскладок (плоская и в подпапке зоны).
+            var filePath = FindScopeFilePath(zoneName, scopeName);
+            if (filePath == null)
             {
-                AppendLog($"ОШИБКА: файл scope не найден: {filePath} - проверь имя зоны/scope (регистр важен для пути на диске).");
+                AppendLog("ОШИБКА: файл scope не найден ни по одному из известных путей:" + Environment.NewLine +
+                          "  " + string.Join(Environment.NewLine + "  ", ScopeFilePathCandidates(zoneName, scopeName)));
                 return 0;
             }
 
@@ -1950,13 +1976,12 @@ namespace DnsToolWinForms.Controls
 
             if (fileFallback.Count > 0)
             {
-                // См. комментарий у AddRecordToScopeFileAsync - файл scope лежит ПЛОСКО прямо в
-                // System32\dns, имя "<scope>.<zone>.dns", без подпапки по имени зоны.
-                var filePath = Path.Combine(@"C:\Windows\System32\dns", $"{scopeName}.{zoneName}.dns");
+                // Файл scope ищем среди известных раскладок (плоская и в подпапке зоны).
+                var filePath = FindScopeFilePath(zoneName, scopeName);
                 var what = fileFallback.Count == 1 ? "запись" : $"записи ({fileFallback.Count})";
                 var confirm = MessageBox.Show(
                     $"DNS Server отказал в удалении через API (WIN32 9611: зона файловая / только чтение)." +
-                    $"{Environment.NewLine}{Environment.NewLine}Удалить {what} напрямую из файла scope:{Environment.NewLine}{filePath}{Environment.NewLine}" +
+                    $"{Environment.NewLine}{Environment.NewLine}Удалить {what} напрямую из файла scope:{Environment.NewLine}{filePath ?? "(файл scope не найден на диске)"}{Environment.NewLine}" +
                     $"на ЭТОЙ машине (локально, независимо от настройки \"Целевой сервер\" сверху), после чего зона будет перезагружена командой dnscmd /ZoneReload." +
                     $"{Environment.NewLine}{Environment.NewLine}Удалится только строка, точно совпадающая с выбранной записью по имени, типу и значению. " +
                     $"Перед правкой создаётся резервная копия файла. Если однозначного совпадения нет - файл не трогается." +
