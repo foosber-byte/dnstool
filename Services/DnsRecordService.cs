@@ -88,7 +88,7 @@ namespace DnsToolWinForms.Services
         /// </summary>
         public static (string Cmdlet, Dictionary<string, object> Parameters) BuildAddRecordCommand(
             string zoneName, string scopeName, string type, string name, string value,
-            string priorityText, string weightText, string portText)
+            string priorityText, string weightText, string portText, string ttlText = null)
         {
             var parameters = new Dictionary<string, object>
             {
@@ -96,6 +96,12 @@ namespace DnsToolWinForms.Services
                 ["ZoneScope"] = scopeName,
                 ["Name"] = name
             };
+
+            // TTL записи (как поле "истекает через" в расширенных свойствах оснастки DNS, там
+            // по умолчанию 1 час). Если не указан - запись создаётся с zone default, как раньше.
+            var ttlSeconds = ParseTtlToSeconds(ttlText);
+            if (ttlSeconds.HasValue)
+                parameters["TimeToLive"] = TimeSpan.FromSeconds(ttlSeconds.Value);
 
             string cmdlet;
             switch (type)
@@ -153,6 +159,28 @@ namespace DnsToolWinForms.Services
         }
 
         public static int ParseIntOrDefault(string s, int fallback) => int.TryParse(s, out var v) ? v : fallback;
+
+        /// <summary>
+        /// Разбор TTL: либо чистые секунды ("3600"), либо "чч:мм:сс"/"мм:сс" (как показывает
+        /// оснастка DNS, там по умолчанию "1:00:00"). null/пусто/неразбираемо -> null
+        /// (используется zone default).
+        /// </summary>
+        public static int? ParseTtlToSeconds(string s)
+        {
+            if (string.IsNullOrWhiteSpace(s)) return null;
+            s = s.Trim();
+            // Чистое число = секунды, проверяем ПЕРВЫМ: TimeSpan.TryParse("3600") съел бы это
+            // как 3600 ДНЕЙ, а не секунды. TimeSpan - только для форматов с двоеточием.
+            if (int.TryParse(s, out var sec) && sec > 0)
+                return sec;
+            if (s.Contains(":") && TimeSpan.TryParse(s, out var ts) && ts > TimeSpan.Zero)
+                return (int)ts.TotalSeconds;
+            return null;
+        }
+
+        /// <summary>Секунды -> строка "чч:мм:сс" для показа в диалоге (3600 -> "01:00:00").</summary>
+        public static string FormatTtl(int seconds) =>
+            TimeSpan.FromSeconds(seconds).ToString(@"hh\:mm\:ss");
 
         public static string EnsureTrailingDot(string fqdn) =>
             string.IsNullOrEmpty(fqdn) || fqdn.EndsWith(".") ? fqdn : fqdn + ".";

@@ -156,6 +156,51 @@ namespace DnsToolWinForms.Tests
             Assert.Equal("", DnsRecordService.GetFolderPathSuffix(root)); // корень scope не включается
         }
 
+        // ---------- TTL ----------
+
+        [Theory]
+        [InlineData("01:00:00", 3600)]
+        [InlineData("1:00:00", 3600)]
+        [InlineData("00:05:00", 300)]
+        [InlineData("10:00", 36000)] // чч:мм
+        [InlineData("3600", 3600)]
+        public void ParseTtlToSeconds_ParsesAllFormats(string input, int expected)
+        {
+            Assert.Equal(expected, DnsRecordService.ParseTtlToSeconds(input));
+        }
+
+        [Theory]
+        [InlineData(null)]
+        [InlineData("")]
+        [InlineData("   ")]
+        [InlineData("абракадабра")]
+        [InlineData("0")]
+        [InlineData("-100")]
+        public void ParseTtlToSeconds_InvalidReturnsNull(string input)
+        {
+            Assert.Null(DnsRecordService.ParseTtlToSeconds(input));
+        }
+
+        [Fact]
+        public void BuildAddRecordCommand_TtlSetsTimeToLive()
+        {
+            var (_, p) = DnsRecordService.BuildAddRecordCommand("z", "s", "A", "www", "10.0.0.1", "", "", "", "00:05:00");
+            Assert.Equal(System.TimeSpan.FromMinutes(5), p["TimeToLive"]);
+        }
+
+        [Fact]
+        public void BuildAddRecordCommand_NoTtl_OmitsTimeToLive()
+        {
+            var (_, p) = DnsRecordService.BuildAddRecordCommand("z", "s", "A", "www", "10.0.0.1", "", "", "", "");
+            Assert.False(p.ContainsKey("TimeToLive"));
+        }
+
+        [Fact]
+        public void FormatTtl_RendersHourDefault()
+        {
+            Assert.Equal("01:00:00", DnsRecordService.FormatTtl(3600));
+        }
+
         // ---------- разбор .dns-файла ----------
 
         [Theory]

@@ -13,6 +13,8 @@ namespace DnsToolWinForms
         public string Priority;
         public string Weight;
         public string Port;
+        /// <summary>TTL в секундах строкой ("3600"); null/пусто - zone default (1 час).</summary>
+        public string Ttl;
     }
 
     /// <summary>
@@ -25,7 +27,8 @@ namespace DnsToolWinForms
     public static class RecordEditDialog
     {
         public static RecordEditResult Show(string currentType, string currentName, string currentValue,
-            string currentPriority, string currentWeight, string currentPort, bool isNew = false)
+            string currentPriority, string currentWeight, string currentPort,
+            string currentTtl = "01:00:00", bool isNew = false)
         {
             using var dlg = new Form
             {
@@ -35,7 +38,7 @@ namespace DnsToolWinForms
                 MaximizeBox = false,
                 MinimizeBox = false,
                 ShowInTaskbar = false,
-                ClientSize = new Size(440, 270),
+                ClientSize = new Size(440, 306),
                 Font = new Font("Segoe UI", 9F),
                 Icon = AppIcon.Current
             };
@@ -72,6 +75,15 @@ namespace DnsToolWinForms
                 "Weight и Port игнорируются. Для остальных типов записей эти поля не используются.");
             hintSrv.Location = new Point(16, 160);
 
+            // TTL записи - как в расширенных свойствах оснастки DNS, где по умолчанию 1 час
+            // ("1:00:00"). Пусто = zone default. Принимаются форматы "чч:мм:сс"/"мм:сс" и секунды.
+            var lblTtl = new Label { Text = "TTL (чч:мм:сс):", Location = new Point(16, 186), AutoSize = true };
+            var txtTtl = new TextBox { Location = new Point(140, 182), Width = 120, Text = string.IsNullOrWhiteSpace(currentTtl) ? "01:00:00" : currentTtl };
+            var hintTtl = HelpIcon.Create(toolTip,
+                "Время жизни записи (как в расширенных свойствах оснастки DNS, по умолчанию 1 час). " +
+                "Форматы: \"чч:мм:сс\", \"мм:сс\" или секунды. Оставь как есть, если не уверен.");
+            hintTtl.Location = new Point(270, 184);
+
             // Поля Priority/Weight/Port нужны только для SRV и MX - показываем их только тогда,
             // когда выбран подходящий тип, а не всегда (для A/AAAA/CNAME и т.п. они бы просто
             // занимали место, ничего не делая).
@@ -98,13 +110,14 @@ namespace DnsToolWinForms
             cmbType.SelectedIndexChanged += (s, e) => UpdateFieldVisibility();
             UpdateFieldVisibility(); // начальное состояние - сразу после создания всех полей выше
 
-            var btnCancel = new Button { Text = "Отмена", DialogResult = DialogResult.Cancel, Location = new Point(240, 200), Size = new Size(90, 32) };
-            var btnSave = new Button { Text = isNew ? "Добавить" : "Сохранить", DialogResult = DialogResult.OK, Location = new Point(336, 200), Size = new Size(90, 32) };
+            var btnCancel = new Button { Text = "Отмена", DialogResult = DialogResult.Cancel, Location = new Point(240, 236), Size = new Size(90, 32) };
+            var btnSave = new Button { Text = isNew ? "Добавить" : "Сохранить", DialogResult = DialogResult.OK, Location = new Point(336, 236), Size = new Size(90, 32) };
 
             dlg.Controls.AddRange(new Control[]
             {
                 lblType, cmbType, hintNote, lblName, txtName, lblValue, txtValue,
                 lblPriority, txtPriority, lblWeight, txtWeight, lblPort, txtPort, hintSrv,
+                lblTtl, txtTtl, hintTtl,
                 btnCancel, btnSave
             });
             dlg.AcceptButton = btnSave;
@@ -119,7 +132,8 @@ namespace DnsToolWinForms
                 Value = txtValue.Text.Trim(),
                 Priority = txtPriority.Text.Trim(),
                 Weight = txtWeight.Text.Trim(),
-                Port = txtPort.Text.Trim()
+                Port = txtPort.Text.Trim(),
+                Ttl = txtTtl.Text.Trim()
             };
         }
     }

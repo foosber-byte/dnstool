@@ -36,6 +36,7 @@ namespace DnsToolWinForms.Controls
         private TextBox txtSrvPriority;
         private TextBox txtSrvWeight;
         private TextBox txtSrvPort;
+        private TextBox txtRecordTtl;
         private Button btnAddRecord;       // прямой ввод - доступен только для Primary (Secondary/Stub read-only)
         private Button btnAddRecordFile;   // файловый обходной путь - имеет смысл только для Secondary/Stub
         private ListBox lstRecords;
@@ -366,6 +367,7 @@ namespace DnsToolWinForms.Controls
             txtSrvPriority = Tb(50, "10");
             txtSrvWeight = Tb(50, "10");
             txtSrvPort = Tb(50, "443");
+            txtRecordTtl = Tb(80, "01:00:00");
 
             btnAddRecord = IconFactory.CreateButton(IconFactory.Add(), "Добавить запись в текущую папку...", _toolTip, async (s, e) =>
             {
@@ -377,6 +379,7 @@ namespace DnsToolWinForms.Controls
                 txtSrvPriority.Text = result.Priority;
                 txtSrvWeight.Text = result.Weight;
                 txtSrvPort.Text = result.Port;
+                txtRecordTtl.Text = result.Ttl;
                 await AddRecordToScopeAsync();
             });
 
@@ -413,6 +416,7 @@ namespace DnsToolWinForms.Controls
                 txtSrvPriority.Text = result.Priority;
                 txtSrvWeight.Text = result.Weight;
                 txtSrvPort.Text = result.Port;
+                txtRecordTtl.Text = result.Ttl;
                 await AddRecordToScopeFileAsync();
             });
 
@@ -1182,7 +1186,7 @@ namespace DnsToolWinForms.Controls
             }
 
             var (cmdlet, parameters) = BuildAddRecordCommand(zoneName, scopeName, type, recordName, value,
-                Val(txtSrvPriority), Val(txtSrvWeight), Val(txtSrvPort));
+                Val(txtSrvPriority), Val(txtSrvWeight), Val(txtSrvPort), Val(txtRecordTtl));
 
             AppendLog($"Добавляю {type}-запись '{recordName}' -> {value} в scope '{scopeName}'...");
             var (_, log) = await Task.Run(() => _runner.Invoke(cmdlet, parameters));
@@ -1604,35 +1608,40 @@ namespace DnsToolWinForms.Controls
             if (confirm != DialogResult.Yes) return;
 
             string line;
+            // TTL в строке .dns допустим (формат "имя [TTL] IN тип rdata"). Пишем его только
+            // когда пользователь задал нечто отличное от zone default (1 час = 3600), чтобы
+            // не плодить расхождений с остальными строками файла.
+            var ttlSeconds = ParseTtlToSeconds(Val(txtRecordTtl));
+            var ttlPrefix = ttlSeconds.HasValue && ttlSeconds.Value != 3600 ? $"{ttlSeconds.Value}\t" : "";
             switch (type)
             {
                 case "AAAA":
-                    line = $"{recordName}\tIN\tAAAA\t{value}";
+                    line = $"{recordName}\t{ttlPrefix}IN\tAAAA\t{value}";
                     break;
                 case "CNAME":
-                    line = $"{recordName}\tIN\tCNAME\t{EnsureTrailingDot(value)}";
+                    line = $"{recordName}\t{ttlPrefix}IN\tCNAME\t{EnsureTrailingDot(value)}";
                     break;
                 case "PTR":
-                    line = $"{recordName}\tIN\tPTR\t{EnsureTrailingDot(value)}";
+                    line = $"{recordName}\t{ttlPrefix}IN\tPTR\t{EnsureTrailingDot(value)}";
                     break;
                 case "NS":
-                    line = $"{recordName}\tIN\tNS\t{EnsureTrailingDot(value)}";
+                    line = $"{recordName}\t{ttlPrefix}IN\tNS\t{EnsureTrailingDot(value)}";
                     break;
                 case "MX":
                     var preference = ParseIntOrDefault(Val(txtSrvPriority), 10);
-                    line = $"{recordName}\tIN\tMX\t{preference} {EnsureTrailingDot(value)}";
+                    line = $"{recordName}\t{ttlPrefix}IN\tMX\t{preference} {EnsureTrailingDot(value)}";
                     break;
                 case "TXT":
-                    line = $"{recordName}\tIN\tTXT\t\"{value}\"";
+                    line = $"{recordName}\t{ttlPrefix}IN\tTXT\t\"{value}\"";
                     break;
                 case "SRV":
                     var priority = ParseIntOrDefault(Val(txtSrvPriority), 10);
                     var weight = ParseIntOrDefault(Val(txtSrvWeight), 10);
                     var port = ParseIntOrDefault(Val(txtSrvPort), 443);
-                    line = $"{recordName}\tIN\tSRV\t{priority} {weight} {port} {EnsureTrailingDot(value)}";
+                    line = $"{recordName}\t{ttlPrefix}IN\tSRV\t{priority} {weight} {port} {EnsureTrailingDot(value)}";
                     break;
                 default: // "A"
-                    line = $"{recordName}\tIN\tA\t{value}";
+                    line = $"{recordName}\t{ttlPrefix}IN\tA\t{value}";
                     break;
             }
 
@@ -2096,7 +2105,12 @@ namespace DnsToolWinForms.Controls
                 }
             }
 
-            var edited = RecordEditDialog.Show(oldType, oldName, oldValue, oldPriority, oldWeight, oldPort);
+            // Текущий TTL записи (TimeSpan от DnsServer) - для показа в диалоге и сравнения.
+            int oldTtlSeconds = oldRecord.Properties["TimeToLive"]?.Value is TimeSpan oldTtlSpan
+                ? (int)oldTtlSpan.TotalSeconds : 3600;
+            var oldTtlText = FormatTtl(oldTtlSeconds);
+
+            var edited = RecordEditDialog.Show(oldType, oldName, oldValue, oldPriority, oldWeight, oldPort, oldTtlText);
             if (edited == null) return; // нажали "Отмена"
 
             edited.Name = NormalizeRecordName(edited.Name, zoneName);
@@ -2108,15 +2122,17 @@ namespace DnsToolWinForms.Controls
             }
 
             // Ничего реально не поменялось - не гоняем сервер зря
+            var editedTtlSeconds = ParseTtlToSeconds(edited.Ttl) ?? oldTtlSeconds;
             if (edited.Type == oldType && edited.Name == oldName && edited.Value == oldValue &&
-                edited.Priority == oldPriority && edited.Weight == oldWeight && edited.Port == oldPort)
+                edited.Priority == oldPriority && edited.Weight == oldWeight && edited.Port == oldPort &&
+                editedTtlSeconds == oldTtlSeconds)
             {
                 AppendLog("Изменений нет - ничего не сохраняю.");
                 return;
             }
 
             var (addCmdlet, addParameters) = BuildAddRecordCommand(zoneName, scopeName, edited.Type, edited.Name, edited.Value,
-                edited.Priority, edited.Weight, edited.Port);
+                edited.Priority, edited.Weight, edited.Port, editedTtlSeconds != 3600 ? editedTtlSeconds.ToString() : null);
 
             // DNS не даёт CNAME сосуществовать с ЛЮБОЙ другой записью под тем же именем -
             // ни секунды. Если имя не меняется и хотя бы одна из сторон (старая или новая) CNAME,
@@ -2130,7 +2146,7 @@ namespace DnsToolWinForms.Controls
             if (nameUnchanged && cnameInvolved)
             {
                 await EditRecordRemoveFirstAsync(zoneName, scopeName, oldRecord, oldType, oldName, oldValue,
-                    oldPriority, oldWeight, oldPort, edited, addCmdlet, addParameters);
+                    oldPriority, oldWeight, oldPort, oldTtlText, edited, addCmdlet, addParameters);
                 await RefreshRecordsAsync();
                 return;
             }
@@ -2178,7 +2194,7 @@ namespace DnsToolWinForms.Controls
         /// </summary>
         private async Task EditRecordRemoveFirstAsync(string zoneName, string scopeName, PSObject oldRecord,
             string oldType, string oldName, string oldValue, string oldPriority, string oldWeight, string oldPort,
-            RecordEditResult edited, string addCmdlet, Dictionary<string, object> addParameters)
+            string oldTtlText, RecordEditResult edited, string addCmdlet, Dictionary<string, object> addParameters)
         {
             AppendLog($"Тип/имя связаны с CNAME - удаляю старую запись первой (иначе DNS не даст создать новую под тем же именем)...");
 
@@ -2215,7 +2231,7 @@ namespace DnsToolWinForms.Controls
             // запись назад), чтобы зона не осталась вообще без записи под этим именем.
             AppendLog("ОШИБКА: не удалось создать новую запись. Пробую откатить - вернуть старую запись обратно...");
             var (rollbackCmdlet, rollbackParameters) = BuildAddRecordCommand(zoneName, scopeName, oldType, oldName, oldValue,
-                oldPriority, oldWeight, oldPort);
+                oldPriority, oldWeight, oldPort, oldTtlText);
             var (_, rollbackLog) = await Task.Run(() => _runner.Invoke(rollbackCmdlet, rollbackParameters));
             AppendLog(rollbackLog);
 
