@@ -53,6 +53,7 @@ namespace DnsToolWinForms.Controls
         //      при первом выборе/раскрытии - ничего не тянется впустую) ----
         private TreeView treeRecordFolders;
         private RecordTreeNode _currentFolderNode; // какая "папка" сейчас показана в правом списке
+        private string _lastZoneSourceKey; // "сервер|зона", для которых уже подтягивали источник/тип - чтобы не повторять запрос на каждый клик по папке
         private Label lblCurrentFolderPath; // "Добавление в: ..." - видимая подсказка, куда попадёт новая запись
         private Dictionary<RecordTreeNode, TreeNode> _folderToTreeNode = new Dictionary<RecordTreeNode, TreeNode>();
         private Dictionary<RecordTreeNode, string> _folderRootToScopeName = new Dictionary<RecordTreeNode, string>(); // корень поддерева -> имя scope, которому он принадлежит
@@ -193,10 +194,16 @@ namespace DnsToolWinForms.Controls
                         txtRecordScopeName.Text = ownerScope;
                     UpdateCurrentFolderPathLabel();
                     RenderRecordsList();
+                    // Кликнули сразу в scope/папку, минуя узел-зону (дерево раскрывали "+") -
+                    // данные о зоне (тип/хранилище) могли не загрузиться, а от них зависит
+                    // доступность кнопок добавления. Догружаем молча, кэш исключает повторные
+                    // запросы при переходах между папками одной и той же зоны.
+                    await EnsureZoneSourceLoadedAsync(node);
                 }
                 else if (node?.Tag is string scopeNameUnloaded && !_loadedScopeTreeNodes.Contains(node))
                 {
                     SyncContextToTreeNode(node);
+                    await EnsureZoneSourceLoadedAsync(node);
                     await LoadScopeIntoTreeAsync(node, scopeNameUnloaded);
                     node.Expand();
                 }
@@ -590,6 +597,7 @@ namespace DnsToolWinForms.Controls
         private async Task ShowSelectedZoneSourceAsync(string serverName, string zoneName)
         {
             if (lblZoneSource == null) return;
+            _lastZoneSourceKey = $"{serverName}|{zoneName}";
 
             List<PSObject> results;
             using (_serverContext.BeginTemporaryServer(serverName)) // именно для ЭТОГО запроса, чей бы узел ни был выбран
@@ -609,7 +617,8 @@ namespace DnsToolWinForms.Controls
             }
 
             var zoneType = z.Properties["ZoneType"]?.Value?.ToString() ?? "?";
-            UpdateAddRecordButtons(zoneType);
+            var isDs = z.Properties["IsDsIntegrated"]?.Value is bool ds && ds;
+            UpdateAddRecordButtons(zoneType, isDs);
 
             if (zoneType == "Primary")
             {
@@ -651,20 +660,49 @@ namespace DnsToolWinForms.Controls
         }
 
         /// <summary>
-        /// Доступность кнопок добавления записей по типу выбранной зоны: у Secondary/Stub зона
-        /// read-only через обычный API (WIN32 9611) - доступен только файловый обходной путь;
-        /// у Primary (в т.ч. AD-интегрированной) файловая правка бессмысленна и опасна - доступен
-        /// только прямой ввод. Тип неизвестен (зона не выбрана / не отвечает) - обе включены.
+        /// Доступность кнопок добавления записей по типу/хранилищу выбранной зоны:
+        /// файловое хранилище (Secondary/Stub - read-only через API, WIN32 9611 - ИЛИ
+        /// Primary без AD-интеграции, т.е. обычная .dns-файл-зона) - активен ТОЛЬКО
+        /// файловый обходной путь, прямой ввод заблокирован. AD-интегрированная Primary -
+        /// только прямой ввод, файловая правка опасна (рассинхрон с AD). Тип неизвестен
+        /// (зона не выбрана / не отвечает) - обе включены.
         /// </summary>
-        private void UpdateAddRecordButtons(string zoneType)
+        private void UpdateAddRecordButtons(string zoneType, bool isDsIntegrated = false)
         {
             if (btnAddRecord == null || btnAddRecordFile == null) return;
             var t = (zoneType ?? "").Trim();
-            var isReadOnly = t.Equals("Secondary", StringComparison.OrdinalIgnoreCase)
-                || t.Equals("Stub", StringComparison.OrdinalIgnoreCase);
             var isPrimary = t.Equals("Primary", StringComparison.OrdinalIgnoreCase);
-            btnAddRecord.Enabled = !isReadOnly;
-            btnAddRecordFile.Enabled = !isPrimary;
+            var unknown = t.Length == 0 || t == "?";
+            if (unknown)
+            {
+                btnAddRecord.Enabled = true;
+                btnAddRecordFile.Enabled = true;
+                return;
+            }
+            // Файловое хранилище: любая не-Primary зона ИЛИ Primary, хранящаяся в .dns-файле.
+            var fileBacked = !isPrimary || !isDsIntegrated;
+            btnAddRecord.Enabled = !fileBacked;
+            btnAddRecordFile.Enabled = fileBacked;
+        }
+
+        /// <summary>
+        /// Гарантирует, что для зоны, которой принадлежит узел (сам узел или ближайший родитель-зона),
+        /// загружены данные об источнике/типе. Нужна для клика сразу по scope/папке, минуя узел-зону:
+        /// дерево часто раскрывали "+", и ShowSelectedZoneSourceAsync для зоны ещё не вызывался.
+        /// Повторные вызовы для той же зоны (переходы между папками) гасятся кэшем _lastZoneSourceKey.
+        /// </summary>
+        private async Task EnsureZoneSourceLoadedAsync(TreeNode node)
+        {
+            for (var n = node; n != null; n = n.Parent)
+            {
+                if (n.Tag is ZoneNodeMarker zm)
+                {
+                    var key = $"{zm.ServerName}|{zm.ZoneName}";
+                    if (key == _lastZoneSourceKey) return;
+                    await ShowSelectedZoneSourceAsync(zm.ServerName, zm.ZoneName);
+                    return;
+                }
+            }
         }
 
         /// <summary>Экспортирует имена зон ТЕКУЩЕГО (уже развёрнутого) сервера в файл - обе категории, прямые и обратные вместе.</summary>
@@ -1480,6 +1518,10 @@ namespace DnsToolWinForms.Controls
         private static List<string> ScopeFilePathCandidates(string zoneName, string scopeName)
         {
             var dnsRoot = @"C:\Windows\System32\dns";
+            // Имена из DNS могут приходить с завершающей точкой ("delotech.ru.") и
+            // пробелами по краям - на диске папка/файл названы без них.
+            zoneName = (zoneName ?? "").Trim().TrimEnd('.');
+            scopeName = (scopeName ?? "").Trim().TrimEnd('.');
             return new List<string>
             {
                 Path.Combine(dnsRoot, $"{scopeName}.{zoneName}.dns"),          // плоская раскладка
