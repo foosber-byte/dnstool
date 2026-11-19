@@ -1293,7 +1293,7 @@ namespace DnsToolWinForms.Controls
             catch (Exception ex) { AppendLog($"ОШИБКА: не удалось прочитать файл - {ex.Message}"); return; }
 
             var detectedFolders = new List<string>();
-            var detectedRecords = new List<(string Name, string Type, string Value)>();
+            var detectedRecords = new List<(string Name, string Type, string Value, string Ttl)>();
 
             foreach (var raw in rawLines)
             {
@@ -1316,14 +1316,24 @@ namespace DnsToolWinForms.Controls
 
                 // Формат строки записи - "{name,-28} {type,-6} {value}" (см. RenderRecordsList).
                 // Парсим по разделителю "2+ пробела подряд", а не по точным позициям колонок -
-                // устойчивее, если формат чуть поменяется в будущей версии.
+                // устойчивее, если формат чуть поменяется в будущей версии. Начиная с v2.9.8
+                // в конце строки может быть колонка "TTL:чч:мм:сс" (или "TTL:д.чч:мм:сс") -
+                // присутствует только у записей с TTL, отличным от дефолта (1 час).
                 var parts = System.Text.RegularExpressions.Regex.Split(line.Trim(), @"\s{2,}");
                 if (parts.Length < 3) continue; // не похоже на строку записи - пропускаем молча
 
                 var name = parts[0].Trim();
                 var type = parts[1].Trim();
+                var ttlText = (string)null;
+                var last = parts[parts.Length - 1].Trim();
+                var ttlMatch = System.Text.RegularExpressions.Regex.Match(last, @"^TTL:(?<ttl>.+)$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (ttlMatch.Success && DnsRecordService.ParseTtlToSeconds(ttlMatch.Groups["ttl"].Value).HasValue)
+                {
+                    ttlText = ttlMatch.Groups["ttl"].Value.Trim();
+                    parts = parts.Take(parts.Length - 1).ToArray();
+                }
                 var value = string.Join(" ", parts.Skip(2)).Trim();
-                detectedRecords.Add((name, type, value));
+                detectedRecords.Add((name, type, value, ttlText));
             }
 
             if (detectedRecords.Count == 0 && detectedFolders.Count == 0)
@@ -1481,7 +1491,7 @@ namespace DnsToolWinForms.Controls
                     knownRecords.Remove(recordKey); // старой больше нет - если добавление ниже не удастся, конфликта на неё уже не будет
                 }
 
-                var (addCmdlet, addParams) = BuildAddRecordCommand(zoneName, scopeName, rec.Type, rec.Name, value, priority, weight, port);
+                var (addCmdlet, addParams) = BuildAddRecordCommand(zoneName, scopeName, rec.Type, rec.Name, value, priority, weight, port, rec.Ttl);
                 var (_, addLog) = await Task.Run(() => _runner.Invoke(addCmdlet, addParams));
 
                 if (WasSuccess(addLog))
@@ -1862,6 +1872,31 @@ namespace DnsToolWinForms.Controls
         }
 
         /// <summary>
+        /// Строка записи для списка/экспорта: "{name,-28} {type,-6} {value}", а при
+        /// нестандартном TTL - ещё хвост "  TTL:чч:мм:сс" (2+ пробела = отдельная колонка,
+        /// импорт разбирает её тем же разделителем, что и остальные поля).
+        /// </summary>
+        private static string FormatRecordRow(string name, string type, string data, int? ttlSeconds)
+        {
+            var value = $"{name,-28} {type,-6} {data}";
+            return ttlSeconds.HasValue
+                ? $"{value,-48}  TTL:{DnsRecordService.FormatTtl(ttlSeconds.Value)}"
+                : value;
+        }
+
+        /// <summary>
+        /// TTL записи из "сырого" объекта Get-DnsServerResourceRecord (TimeSpan). null, если
+        /// TTL не задан или равен дефолту (1 час) - такие в колонке TTL не показываем и в
+        /// экспорт не пишем, чтобы не засорять список/файл значениями по умолчанию.
+        /// </summary>
+        private static int? GetRecordTtlSeconds(PSObject rec)
+        {
+            var ttl = rec?.Properties["TimeToLive"]?.Value as TimeSpan?;
+            if (ttl == null || ttl <= TimeSpan.Zero || ttl == TimeSpan.FromHours(1)) return null;
+            return (int)ttl.Value.TotalSeconds;
+        }
+
+        /// <summary>
         /// Перестраивает lstRecords из ТЕКУЩЕЙ ПАПКИ (_currentFolderNode) - и её подпапки, и её
         /// собственные записи - с учётом фильтра/сортировки, без обращения к серверу. Параллельно
         /// обновляет _displayedRecords/_displayedFolders - по ним (не по _lastScopeRecords!) идёт
@@ -1900,8 +1935,7 @@ namespace DnsToolWinForms.Controls
                         var name = rec.Properties["HostName"]?.Value?.ToString() ?? "";
                         var type = rec.Properties["RecordType"]?.Value?.ToString() ?? "";
                         var data = DnsHelper.DescribeRecordData(rec.Properties["RecordData"]?.Value, type);
-                        var display = $"{name,-28} {type,-6} {data}";
-                        rows.Add((display, name, type, data, false, null, rec));
+                        rows.Add((FormatRecordRow(name, type, data, GetRecordTtlSeconds(rec)), name, type, data, false, null, rec));
                     }
                 }
             }
@@ -1911,8 +1945,7 @@ namespace DnsToolWinForms.Controls
                 var name = rec.Properties["HostName"]?.Value?.ToString() ?? "";
                 var type = rec.Properties["RecordType"]?.Value?.ToString() ?? "";
                 var data = DnsHelper.DescribeRecordData(rec.Properties["RecordData"]?.Value, type);
-                var display = $"{name,-28} {type,-6} {data}";
-                rows.Add((display, name, type, data, false, null, rec));
+                rows.Add((FormatRecordRow(name, type, data, GetRecordTtlSeconds(rec)), name, type, data, false, null, rec));
             }
 
             IEnumerable<(string display, string name, string type, string value, bool isFolder, RecordTreeNode folder, PSObject record)> filtered = rows;

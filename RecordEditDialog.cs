@@ -77,7 +77,7 @@ namespace DnsToolWinForms
 
             // TTL записи - как в расширенных свойствах оснастки DNS, где по умолчанию 1 час
             // ("1:00:00"). Пусто = zone default. Принимаются форматы "чч:мм:сс"/"мм:сс" и секунды.
-            var lblTtl = new Label { Text = "TTL (чч:мм:сс):", Location = new Point(16, 186), AutoSize = true };
+            var lblTtl = new Label { Text = "TTL (сек / чч:мм:сс / д.чч:мм:сс):", Location = new Point(16, 186), AutoSize = true };
             var txtTtl = new TextBox { Location = new Point(140, 182), Width = 120, Text = string.IsNullOrWhiteSpace(currentTtl) ? "01:00:00" : currentTtl };
             var hintTtl = HelpIcon.Create(toolTip,
                 "Время жизни записи (как в расширенных свойствах оснастки DNS, по умолчанию 1 час). " +

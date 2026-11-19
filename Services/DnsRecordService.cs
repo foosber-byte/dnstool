@@ -162,7 +162,8 @@ namespace DnsToolWinForms.Services
 
         /// <summary>
         /// Разбор TTL: либо чистые секунды ("3600"), либо "чч:мм:сс"/"мм:сс" (как показывает
-        /// оснастка DNS, там по умолчанию "1:00:00"). null/пусто/неразбираемо -> null
+        /// оснастка DNS, там по умолчанию "1:00:00"), либо с днями: "дд.чч:мм:сс" или
+        /// "дд д" / "ддд" (например "2д" = 2 дня). null/пусто/неразбираемо -> null
         /// (используется zone default).
         /// </summary>
         public static int? ParseTtlToSeconds(string s)
@@ -173,14 +174,29 @@ namespace DnsToolWinForms.Services
             // как 3600 ДНЕЙ, а не секунды. TimeSpan - только для форматов с двоеточием.
             if (int.TryParse(s, out var sec) && sec > 0)
                 return sec;
+            // Дни: "2д", "2 д", "2d" или "дд.чч:мм:сс" (как показывает оснастка DNS для
+            // больших TTL, например "2.01:00:00" = 2 дня 1 час).
+            var m = System.Text.RegularExpressions.Regex.Match(s,
+                @"^(?<d>\d+)\s*[дДdD]$");
+            if (m.Success && int.TryParse(m.Groups["d"].Value, out var d) && d > 0 && d <= 3650)
+                return d * 86400;
+            if (System.Text.RegularExpressions.Regex.Match(s, @"^(?<d>\d+)\.(?<t>[\d:.]+)$").Success
+                && TimeSpan.TryParse(s, out var tsDays) && tsDays > TimeSpan.Zero)
+                return (int)tsDays.TotalSeconds;
             if (s.Contains(":") && TimeSpan.TryParse(s, out var ts) && ts > TimeSpan.Zero)
                 return (int)ts.TotalSeconds;
             return null;
         }
 
-        /// <summary>Секунды -> строка "чч:мм:сс" для показа в диалоге (3600 -> "01:00:00").</summary>
-        public static string FormatTtl(int seconds) =>
-            TimeSpan.FromSeconds(seconds).ToString(@"hh\:mm\:ss");
+        /// <summary>
+        /// Секунды -> строка для показа в диалоге: дни, если >= 1 суток ("2.01:00:00",
+        /// как показывает оснастка DNS), иначе "чч:мм:сс" (3600 -> "01:00:00").
+        /// </summary>
+        public static string FormatTtl(int seconds)
+        {
+            var ts = TimeSpan.FromSeconds(seconds);
+            return ts.TotalDays >= 1 ? ts.ToString(@"d\.hh\:mm\:ss") : ts.ToString(@"hh\:mm\:ss");
+        }
 
         public static string EnsureTrailingDot(string fqdn) =>
             string.IsNullOrEmpty(fqdn) || fqdn.EndsWith(".") ? fqdn : fqdn + ".";

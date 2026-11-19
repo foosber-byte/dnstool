@@ -201,6 +201,33 @@ namespace DnsToolWinForms.Tests
             Assert.Equal("01:00:00", DnsRecordService.FormatTtl(3600));
         }
 
+        [Theory]
+        [InlineData("2д", 2 * 86400)]
+        [InlineData("2 Д", 2 * 86400)]
+        [InlineData("2d", 2 * 86400)]
+        [InlineData("172800", 2 * 86400)]
+        [InlineData("2.01:00:00", 2 * 86400 + 3600)]
+        public void ParseTtlToSeconds_AcceptsDays(string input, int expected)
+        {
+            Assert.Equal(expected, DnsRecordService.ParseTtlToSeconds(input));
+        }
+
+        [Theory]
+        [InlineData("2 дня")]
+        [InlineData("1.5д")]
+        [InlineData("д2")]
+        public void ParseTtlToSeconds_DaysInvalidReturnsNull(string input)
+        {
+            Assert.Null(DnsRecordService.ParseTtlToSeconds(input));
+        }
+
+        [Fact]
+        public void FormatTtl_RendersDaysWithDayPrefix()
+        {
+            Assert.Equal("2.01:00:00", DnsRecordService.FormatTtl(2 * 86400 + 3600));
+            Assert.Equal("03:00:00", DnsRecordService.FormatTtl(3 * 3600));
+        }
+
         // ---------- разбор .dns-файла ----------
 
         [Theory]
