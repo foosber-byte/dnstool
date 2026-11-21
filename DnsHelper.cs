@@ -45,6 +45,14 @@ namespace DnsToolWinForms
                 text.IndexOf("0x80070005", StringComparison.OrdinalIgnoreCase) >= 0 ||
                 text.IndexOf("PermissionDenied", StringComparison.Ordinal) >= 0);
 
+        /// <summary>
+        /// Короткое сообщение "ОШИБКА: ..." для известных WIN32-кодов DNS (9711 и соседи) -
+        /// null, если код не узнаваем. parameters - параметры текущего командлета, оттуда
+        /// берутся имя записи/зоны/области для конкретного текста.
+        /// </summary>
+        private static string DnsRecordServiceShortError(string errorText, Dictionary<string, object> parameters = null) =>
+            Services.DnsErrorMessages.BuildShortError(errorText, parameters);
+
         /// <summary>Одна закешированная CimSession для конкретного сервера + раннспейс, которым она создана (должен жить, пока жива сессия - см. комментарий ниже).</summary>
         private class CimSessionEntry
         {
@@ -243,6 +251,16 @@ namespace DnsToolWinForms
             {
                 var description = DescribeException(ex);
 
+                // Известные WIN32-коды DNS (9711 "запись уже существует" и соседи) - короткая
+                // русская суть вместо полной простыни CimException; детали остаются в файловом
+                // логе (LogChange пишет возвращённый log целиком).
+                var shortError = DnsRecordServiceShortError(description, parameters);
+                if (shortError != null)
+                {
+                    log.AppendLine(shortError);
+                    return (new List<PSObject>(), log.ToString());
+                }
+
                 // WIN32 1722 "Сервер RPC недоступен" при ЛОКАЛЬНОМ вызове (ComputerName пуст,
                 // то есть мы обращаемся к этой же машине) почти всегда означает одно: на ней
                 // не установлена роль DNS Server (и/или RSAT: DNS Server Tools) - службе DNS
@@ -303,6 +321,13 @@ namespace DnsToolWinForms
                     var isLocalCallForThisError = string.IsNullOrWhiteSpace(ComputerName) &&
                                                    (parameters == null || !parameters.ContainsKey("ComputerName"));
                     var combinedText = exceptionDescription ?? msg;
+
+                    var shortError = DnsRecordServiceShortError(combinedText, parameters);
+                    if (shortError != null)
+                    {
+                        log.AppendLine(shortError);
+                        continue;
+                    }
 
                     if (isLocalCallForThisError && !IsRunningElevated && LooksLikeAccessDenied(combinedText))
                     {

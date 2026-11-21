@@ -413,5 +413,96 @@ namespace DnsToolWinForms.Tests
 
             Assert.Null(DnsRecordService.FindScopeFileRecordLines(new List<string> { "@" }, "z", rec));
         }
+
+        // ---------- DnsErrorMessages (короткие русские сообщения для WIN32-кодов) ----------
+
+        // Реальный пример из файлового лога пользователя (v2.9.9, запись vld-dc03 в sasco.ru)
+        private const string RealCimWall = "[WIN32 9711,Add-DnsServerResourceRecordA] | " +
+            "Microsoft.Management.Infrastructure.CimException: Не удалось создать запись ресурса vld-dc03 " +
+            "в области sasco.ru зоны sasco.ru на сервере VK-DT-DCGKD-P1. | StatusCode=11 | NativeErrorCode=Ok | " +
+            "ErrorSource=vld-dc03 | MessageId=WIN32 9711 | error_Category=20 | error_Code=9711 | error_Type=WIN32 | " +
+            "error_WindowsErrorMessage=Запись DNS уже существует.";
+
+        [Fact]
+        public void DnsErrorMessages_ExtractsCodeFromRealLog()
+        {
+            Assert.Equal("9711", DnsErrorMessages.ExtractWin32Code(RealCimWall));
+            Assert.Equal("9711", DnsErrorMessages.ExtractWin32Code("error_Code=9711"));
+            Assert.Equal("9709", DnsErrorMessages.ExtractWin32Code("MessageId=WIN32 9709 | error_Code=9709"));
+            Assert.Null(DnsErrorMessages.ExtractWin32Code("какой-то другой текст без кода"));
+            Assert.Null(DnsErrorMessages.ExtractWin32Code(null));
+            Assert.Null(DnsErrorMessages.ExtractWin32Code(""));
+        }
+
+        [Fact]
+        public void DnsErrorMessages_9711_ShortMessageWithRecordAndZone()
+        {
+            var p = new Dictionary<string, object> { ["ZoneName"] = "sasco.ru", ["ZoneScope"] = "sasco.ru", ["Name"] = "vld-dc03" };
+
+            var msg = DnsErrorMessages.BuildShortError(RealCimWall, p);
+
+            Assert.NotNull(msg);
+            Assert.StartsWith("ОШИБКА:", msg);
+            Assert.Contains("vld-dc03", msg);
+            Assert.Contains("sasco.ru", msg);
+            Assert.Contains("уже существует", msg);
+            // Простойни CimException быть не должно
+            Assert.DoesNotContain("CimException", msg);
+            Assert.DoesNotContain("StatusCode=", msg);
+        }
+
+        [Fact]
+        public void DnsErrorMessages_EqualScopeName_NotDuplicated()
+        {
+            var p = new Dictionary<string, object> { ["ZoneName"] = "sasco.ru", ["ZoneScope"] = "sasco.ru", ["Name"] = "www" };
+
+            var msg = DnsErrorMessages.BuildShortError("MessageId=WIN32 9711", p);
+
+            // scope совпадает с зоной - не должно быть "в области sasco.ru зоны sasco.ru"
+            Assert.Contains("в зоне \"sasco.ru\"", msg);
+            Assert.DoesNotContain("области", msg);
+        }
+
+        [Fact]
+        public void DnsErrorMessages_DifferentScopeName_IsMentioned()
+        {
+            var p = new Dictionary<string, object> { ["ZoneName"] = "z.local", ["ZoneScope"] = "scope1", ["Name"] = "www" };
+
+            var msg = DnsErrorMessages.BuildShortError("error_Code=9711", p);
+
+            Assert.Contains("область \"scope1\"", msg);
+        }
+
+        [Fact]
+        public void DnsErrorMessages_UnknownCode_ReturnsNull()
+        {
+            Assert.Null(DnsErrorMessages.BuildShortError("WIN32 12345 что-то неизвестное", null));
+            Assert.Null(DnsErrorMessages.BuildShortError(null, null));
+        }
+
+        [Fact]
+        public void DnsErrorMessages_ZoneCodes_UseZoneName()
+        {
+            var p = new Dictionary<string, object> { ["ZoneName"] = "old.local" };
+
+            var missing = DnsErrorMessages.BuildShortError("error_Code=9601", p);
+            Assert.Contains("Зона \"old.local\"", missing);
+            Assert.Contains("не существует", missing);
+
+            var exists = DnsErrorMessages.BuildShortError("MessageId=WIN32 9609", p);
+            Assert.Contains("Зона \"old.local\"", exists);
+            Assert.Contains("уже существует", exists);
+        }
+
+        [Fact]
+        public void DnsErrorMessages_CnameCollision_9709()
+        {
+            var p = new Dictionary<string, object> { ["ZoneName"] = "z.local", ["Name"] = "www" };
+
+            var msg = DnsErrorMessages.BuildShortError("MessageId=WIN32 9709", p);
+
+            Assert.Contains("www", msg);
+            Assert.Contains("CNAME", msg);
+        }
     }
 }
