@@ -9,6 +9,16 @@
 
 ---
 
+- 2026-11-21 дом (KERTEE-PC) — Релиз v2.9.10: короткие русские сообщения вместо
+  простыни CIM-ошибок WIN32 (9711 дубликат, 9709/9708 конфликт с CNAME, 9701/9706,
+  9601/9609) — Services/DnsErrorMessages.cs + две точки интеграции в DnsHelper.Invoke;
+  полная простыня остаётся в файловом логе. Тесты 193/193. Версия поднята в 4 местах
+  (AppVersion.cs, csproj, оба README). tools/check-release-key.ps1 переписан в UTF-8
+  BOM (powershell 5.1 ломался на кириллице), парность ключа подтверждена. Тег v2.9.10
+  = 4841e7a, HEAD 06e92d6 (BOM-фикс), всё запушено. Артефакт подписан и проверен:
+  bin/Release/net48/publish/DNS.Server.Tool_v2.9.10_x64.zip (+.sig), signature valid.
+  Жду: создать GitHub Release v2.9.10 через gh, приложив zip и .sig.
+
 - 2026-11-21 дом (KERTEE-PC) — Спулены изменения origin/main (HEAD fc5b320, v2.9.9).
   Чинил «нет доступных тестов»: на папке репо стояли чужие High integrity label и
   битые ACE (SID S-1-4-…), из-за них CLR .NET Framework считал папку «сетевым
