@@ -1122,6 +1122,16 @@ namespace DnsToolWinForms.Controls
                 scopeNode.Nodes.Add(new TreeNode("...")); // заглушка - только чтобы была стрелка разворачивания
                 zoneNode.Nodes.Add(scopeNode);
             }
+
+            // В зоне ровно один scope - нет смысла заставлять пользователя кликать по нему:
+            // выделяем узел сами, AfterSelect догрузит записи и заполнит имя scope.
+            if (scopeNames.Count == 1 && zoneNode.TreeView != null)
+            {
+                zoneNode.Expand();
+                var singleScopeNode = zoneNode.Nodes[0];
+                if (treeRecordFolders.SelectedNode != singleScopeNode)
+                    treeRecordFolders.SelectedNode = singleScopeNode; // триггерит AfterSelect с догрузкой
+            }
         }
 
         /// <summary>Ищет узел-зону конкретного сервера в уже построенном дереве (через категорию прямых/обратных - без обращения к серверу).</summary>
