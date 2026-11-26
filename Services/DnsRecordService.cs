@@ -88,7 +88,8 @@ namespace DnsToolWinForms.Services
         /// </summary>
         public static (string Cmdlet, Dictionary<string, object> Parameters) BuildAddRecordCommand(
             string zoneName, string scopeName, string type, string name, string value,
-            string priorityText, string weightText, string portText, string ttlText = null)
+            string priorityText, string weightText, string portText, string ttlText = null,
+            bool createPtr = false)
         {
             var parameters = new Dictionary<string, object>
             {
@@ -102,6 +103,13 @@ namespace DnsToolWinForms.Services
             var ttlSeconds = ParseTtlToSeconds(ttlText);
             if (ttlSeconds.HasValue)
                 parameters["TimeToLive"] = TimeSpan.FromSeconds(ttlSeconds.Value);
+
+            // -CreatePtr есть только у командлетов A/AAAA (проверено по параметрам модуля
+            // DnsServer): сервер сам создаст PTR в reverse-зоне. Если подходящей обратной зоны
+            // нет - запись создаётся, PTR молча пропускается (поведение службы DNS Server,
+            // то же, что галка "Создать соответствующую PTR-запись" в dnsmgmt.msc).
+            if (createPtr && (type == "A" || type == "AAAA"))
+                parameters["CreatePtr"] = true;
 
             string cmdlet;
             switch (type)

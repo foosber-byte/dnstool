@@ -63,6 +63,36 @@ namespace DnsToolWinForms.Tests
             Assert.False(parameters.ContainsKey("ReplicationScope"));
         }
 
+        [Theory]
+        [InlineData("Domain")]
+        [InlineData("Forest")]
+        public async Task AddPrimaryReverseZoneAsync_PassesNetworkIdAndReplicationScope(string replicationScope)
+        {
+            var runner = new FakeDnsCommandRunner();
+
+            await new DnsScopeService(runner).AddPrimaryReverseZoneAsync("192.168.10.0/24", replicationScope);
+
+            var (cmdlet, parameters) = Assert.Single(runner.Calls);
+            Assert.Equal("Add-DnsServerPrimaryZone", cmdlet);
+            Assert.Equal("192.168.10.0/24", parameters["NetworkId"]);
+            Assert.Equal(replicationScope, parameters["ReplicationScope"]);
+            Assert.False(parameters.ContainsKey("Name"));
+            Assert.False(parameters.ContainsKey("ZoneFile"));
+        }
+
+        [Fact]
+        public async Task AddPrimaryReverseZoneAsync_FileZone_NoReplicationScope()
+        {
+            var runner = new FakeDnsCommandRunner();
+
+            await new DnsScopeService(runner).AddPrimaryReverseZoneAsync("192.168.10.0/24", null);
+
+            var (cmdlet, parameters) = Assert.Single(runner.Calls);
+            Assert.Equal("Add-DnsServerPrimaryZone", cmdlet);
+            Assert.Equal("192.168.10.0/24", parameters["NetworkId"]);
+            Assert.False(parameters.ContainsKey("ReplicationScope"));
+        }
+
         [Fact]
         public async Task RemoveZoneAsync_ForcesByName()
         {

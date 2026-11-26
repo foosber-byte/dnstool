@@ -85,6 +85,7 @@ namespace DnsToolWinForms.Controls
     {
         // ---- управление зонами (теперь часть вкладки "Scopes и записи", отдельной вкладки "Зоны" больше нет) ----
         private TextBox txtNewZoneName;
+        private TextBox txtNewReverseNetworkId; // сеть для опциональной обратной зоны (заполняет AddZoneDialog, читает AddZoneAsync)
         private ComboBox cmbZoneType;
         private RichTextBox lblZoneSource;
 
@@ -101,6 +102,7 @@ namespace DnsToolWinForms.Controls
         private TextBox txtRecordTtl;
         private Button btnAddRecord;       // прямой ввод - доступен только для Primary (Secondary/Stub read-only)
         private Button btnAddRecordFile;   // файловый обходной путь - имеет смысл только для Secondary/Stub
+        private CheckBox chkCreatePtr;     // -CreatePtr при добавлении A/AAAA (по умолчанию включён)
         private ListView lstRecords;
         private ColumnHeader colRecName, colRecType, colRecValue, colRecTtl;
         private List<PSObject> _lastScopeRecords = new List<PSObject>(); // сырые данные с сервера, без сортировки/фильтра
@@ -382,12 +384,13 @@ namespace DnsToolWinForms.Controls
             cmbScopeZoneName = new ComboBox { Width = 220, DropDownStyle = ComboBoxStyle.DropDown };
             var btnLoadZoneNames = IconFactory.CreateButton(IconFactory.Refresh(), "Обновить список зон (для подсказок в диалогах)", _toolTip,
                 async (s, e) => await _refreshZoneNamesAsync());
-            var btnLoadScopes = IconFactory.CreateButton(IconFactory.Folder(), "Обновить дерево серверов/зон/scope'ов с нуля", _toolTip,
+            var btnLoadScopes = IconFactory.CreateButton(IconFactory.TreeRefresh(), "Обновить дерево серверов/зон/scope'ов с нуля", _toolTip,
                 (s, e) => InitializeServerTree());
 
             // Управление зонами - раньше жило на отдельной вкладке "Зоны", теперь здесь же,
             // рядом со scope-кнопками (см. GroupBox-разделение ниже в разметке column).
             txtNewZoneName = Tb(180, "имя зоны, напр. corp.local");
+            txtNewReverseNetworkId = Tb(0); // невидимое поле-носитель: диалоги передают сеть обратной зоны в AddZoneAsync
             cmbZoneType = new ComboBox { Width = 210, DropDownStyle = ComboBoxStyle.DropDownList };
             cmbZoneType.Items.AddRange(new object[]
             {
@@ -399,10 +402,11 @@ namespace DnsToolWinForms.Controls
 
             var btnAddZone = IconFactory.CreateButton(IconFactory.Add(), "Создать зону...", _toolTip, async (s, e) =>
             {
-                var (name, type) = AddZoneDialog.Show();
-                if (name == null) return; // отмена
-                txtNewZoneName.Text = name;
-                cmbZoneType.Text = type;
+                var result = AddZoneDialog.Show();
+                if (result == null) return; // отмена
+                txtNewZoneName.Text = result.Name;
+                cmbZoneType.Text = result.Type;
+                txtNewReverseNetworkId.Text = result.ReverseNetworkId ?? "";
                 await AddZoneAsync();
             });
             var btnRemoveZone = IconFactory.CreateButton(IconFactory.Delete(), "Удалить выбранную зону (в дереве слева)", _toolTip,
@@ -428,6 +432,10 @@ namespace DnsToolWinForms.Controls
             var btnRemoveScope = IconFactory.CreateButton(IconFactory.Delete(), "Удалить выбранный scope", _toolTip,
                 async (s, e) => await RemoveScopeAsync());
 
+            var btnBackfillPtrs = IconFactory.CreateButton(IconFactory.PtrBackfill(),
+                "Добавить недостающие PTR записи в зону обратного просмотра (по выбранному scope)", _toolTip,
+                async (s, e) => await BackfillPtrsAsync());
+
             txtRecordScopeName = Tb(140, "scope для записей");
             var btnLoadRecords = IconFactory.CreateButton(IconFactory.Refresh(), "Обновить записи текущего scope (выбранного в дереве слева)", _toolTip,
                 async (s, e) => await RefreshRecordsAsync());
@@ -440,6 +448,15 @@ namespace DnsToolWinForms.Controls
 
             txtRecordValue = Tb(220, "IPv4, напр. 10.0.1.10");
             cmbNewRecordType.SelectedIndexChanged += (s, e) => SetPlaceholder(txtRecordValue, PlaceholderForRecordType(cmbNewRecordType.Text));
+
+            // "Создавать соответствующую PTR-запись" - параметр -CreatePtr командлетов A/AAAA.
+            // По умолчанию включён; смысл имеет только для A/AAAA - для остальных типов гасим.
+            chkCreatePtr = new CheckBox { Text = "Обновлять соответствующую PTR запись узла", AutoSize = true, Checked = true, Margin = new Padding(2, 6, 2, 0) };
+            _toolTip.SetToolTip(chkCreatePtr,
+                "Сервер сам создаст PTR-запись в зоне обратного просмотра при добавлении A/AAAA-записи.\n" +
+                "Если подходящей обратной зоны нет - запись создастся, а PTR будет пропущен без ошибки.\n" +
+                "Действует только для типов A и AAAA.");
+            cmbNewRecordType.SelectedIndexChanged += (s, e) => chkCreatePtr.Enabled = cmbNewRecordType.Text is "A" or "AAAA";
 
             txtSrvPriority = Tb(50, "10");
             txtSrvWeight = Tb(50, "10");
@@ -533,6 +550,7 @@ namespace DnsToolWinForms.Controls
             };
             recordsFilterRow.Controls.Add(btnAddRecord);
             recordsFilterRow.Controls.Add(btnAddRecordFile);
+            recordsFilterRow.Controls.Add(chkCreatePtr);
             recordsFilterRow.Controls.Add(new Label { Text = "  Фильтр:", AutoSize = true, Margin = new Padding(2, 6, 0, 0) });
             recordsFilterRow.Controls.Add(txtRecordFilter);
             recordsFilterRow.Controls.Add(cmbRecordSort);
@@ -622,7 +640,7 @@ namespace DnsToolWinForms.Controls
                 Location = new Point(8, 20),
                 Margin = new Padding(0)
             };
-            scopeManagementRow.Controls.AddRange(new Control[] { btnAddScope, btnRemoveScope, btnLoadRecords, });
+            scopeManagementRow.Controls.AddRange(new Control[] { btnAddScope, btnRemoveScope, btnLoadRecords, btnBackfillPtrs });
 
             var scopeManagementGroup = new GroupBox
             {
@@ -824,12 +842,14 @@ namespace DnsToolWinForms.Controls
             string replicationScope = null;
             string zoneFile = null;
             string kindLabel;
+            string reverseReplicationScope = null; // обратная зона наследует тип хранения прямой
 
             switch (cmbZoneType.SelectedIndex)
             {
                 case 1: // AD, реплика на весь лес
                     replicationScope = "Forest";
                     kindLabel = "AD (Forest)";
+                    reverseReplicationScope = "Forest";
                     break;
                 case 2: // Файловая - AD ничего не знает про неё, всё хранится в .dns на диске
                     zoneFile = zoneName + ".dns";
@@ -838,6 +858,7 @@ namespace DnsToolWinForms.Controls
                 default: // AD, реплика на домен (значение по умолчанию, как раньше)
                     replicationScope = "Domain";
                     kindLabel = "AD (Domain)";
+                    reverseReplicationScope = "Domain";
                     break;
             }
 
@@ -845,6 +866,21 @@ namespace DnsToolWinForms.Controls
             var (success, log) = await _scopeService.AddPrimaryZoneAsync(zoneName, replicationScope, zoneFile);
             AppendLog(log);
             FileLogger.LogChange("ZONE ADD", zoneName, $"Тип={kindLabel}", success, log);
+
+            // Опциональная зона обратного просмотра - только после УСПЕШНОГО создания прямой
+            // (иначе прямой зоны нет, а обратная появлялась бы ни для чего). Ошибка обратной
+            // (например, уже существует / нет прав) не откатывает прямую - просто предупреждение.
+            var reverseNetworkId = Val(txtNewReverseNetworkId);
+            if (success && !string.IsNullOrEmpty(reverseNetworkId))
+            {
+                AppendLog($"Создаю зону обратного просмотра для сети '{reverseNetworkId}'...");
+                var (revSuccess, revLog) = await _scopeService.AddPrimaryReverseZoneAsync(reverseNetworkId, reverseReplicationScope);
+                AppendLog(revLog);
+                AppendLog(revSuccess
+                    ? $"OK: зона обратного просмотра для сети \"{reverseNetworkId}\" создана."
+                    : $"ПРЕДУПРЕЖДЕНИЕ: зона обратного просмотра для сети \"{reverseNetworkId}\" НЕ создана - см. ошибку выше. Прямая зона создана.");
+                FileLogger.LogChange("ZONE ADD REVERSE", reverseNetworkId, "Auto при создании прямой зоны", revSuccess, revLog);
+            }
 
             // Обновляем список зон именно ТЕКУЩЕГО сервера (того, что сейчас в панели подключения) - не всё дерево.
             var serverName = _serverContext.CurrentServer;
@@ -1223,6 +1259,39 @@ namespace DnsToolWinForms.Controls
             await RefreshCurrentZoneScopesAsync();
         }
 
+        /// <summary>
+        /// «Добавить недостающие PTR записи в зону обратного просмотра»: прогон по всем
+        /// A/AAAA-записям выбранного scope, создание PTR там, где их ещё нет. Перед запуском -
+        /// усиленное подтверждение (пользователь должен понимать, что массово меняет
+        /// зоны обратного просмотра на сервере). Прогресс и итог - в модальном окне
+        /// PtrBackfillDialog; записи без обратной зоны попадают в итоговый отчёт.
+        /// </summary>
+        private async Task BackfillPtrsAsync()
+        {
+            var zoneName = Val(cmbScopeZoneName);
+            var scopeName = Val(txtRecordScopeName);
+            if (string.IsNullOrEmpty(zoneName) || string.IsNullOrEmpty(scopeName))
+            {
+                AppendLog("Сначала выбери зону и scope в дереве слева - прогон идёт по записям конкретного scope.");
+                return;
+            }
+
+            if (!DangerConfirmDialog.Show(
+                    "Создание PTR записей",
+                    $"   Прогон по scope \"{scopeName}\" зоны \"{zoneName}\"?",
+                    "Для КАЖДОЙ A/AAAA-записи scope будет проверено наличие PTR в зонах обратного просмотра\n" +
+                    "и недостающие PTR-записи будут СОЗДАНЫ на сервере.\n\n" +
+                    "Записи без существующей обратной зоны созданы не будут - они попадут в отчёт по завершении.\n" +
+                    "Действие меняет зоны обратного просмотра сервера - убедись, что понимаешь последствия."))
+                return;
+
+            AppendLog($"Прогон по недостающим PTR: scope '{scopeName}' зоны '{zoneName}'...");
+            var service = new ReverseDnsService(_runner);
+            PtrBackfillDialog.Run(this, service, zoneName, scopeName, CurrentServerLabel());
+            AppendLog("Прогон по PTR завершён (детали - в итоговом окне).");
+            await RefreshRecordsAsync();
+        }
+
         /// <summary>Обновляет видимую подсказку "Добавление в: ..." - вызывать при любой смене текущей папки.</summary>
         private void UpdateCurrentFolderPathLabel()
         {
@@ -1272,7 +1341,8 @@ namespace DnsToolWinForms.Controls
             }
 
             var (cmdlet, parameters) = BuildAddRecordCommand(zoneName, scopeName, type, recordName, value,
-                Val(txtSrvPriority), Val(txtSrvWeight), Val(txtSrvPort), Val(txtRecordTtl));
+                Val(txtSrvPriority), Val(txtSrvWeight), Val(txtSrvPort), Val(txtRecordTtl),
+                createPtr: type is "A" or "AAAA" && chkCreatePtr.Checked);
 
             AppendLog($"Добавляю {type}-запись '{recordName}' -> {value} в scope '{scopeName}'...");
             var (_, log) = await Task.Run(() => _runner.Invoke(cmdlet, parameters));
@@ -1577,7 +1647,8 @@ namespace DnsToolWinForms.Controls
                     knownRecords.Remove(recordKey); // старой больше нет - если добавление ниже не удастся, конфликта на неё уже не будет
                 }
 
-                var (addCmdlet, addParams) = BuildAddRecordCommand(zoneName, scopeName, rec.Type, rec.Name, value, priority, weight, port, rec.Ttl);
+                var (addCmdlet, addParams) = BuildAddRecordCommand(zoneName, scopeName, rec.Type, rec.Name, value, priority, weight, port, rec.Ttl,
+                    createPtr: options.CreatePtr && rec.Type is "A" or "AAAA");
                 var (_, addLog) = await Task.Run(() => _runner.Invoke(addCmdlet, addParams));
 
                 if (WasSuccess(addLog))

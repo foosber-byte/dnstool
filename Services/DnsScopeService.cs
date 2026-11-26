@@ -46,6 +46,20 @@ namespace DnsToolWinForms.Services
             return (DnsOutcome.WasSuccess(log), log);
         }
 
+        /// <summary>
+        /// Создаёт первичную зону ОБРАТНОГО просмотра по сети (NetworkId, например
+        /// "192.168.10.0/24"): DNS Server сам вычислит имя зоны
+        /// (10.168.192.in-addr.arpa / для IPv6 - ...ip6.arpa) и файл .dns - оба параметра
+        /// передавать не нужно. ReplicationScope - только для AD-зоны, для файловой null.
+        /// </summary>
+        public async Task<(bool Success, string Log)> AddPrimaryReverseZoneAsync(string networkId, string replicationScope)
+        {
+            var parameters = new Dictionary<string, object> { ["NetworkId"] = networkId };
+            if (!string.IsNullOrEmpty(replicationScope)) parameters["ReplicationScope"] = replicationScope;
+            var (_, log) = await Task.Run(() => _runner.Invoke("Add-DnsServerPrimaryZone", parameters));
+            return (DnsOutcome.WasSuccess(log), log);
+        }
+
         public async Task<(bool Success, string Log)> RemoveZoneAsync(string zoneName)
         {
             var parameters = new Dictionary<string, object> { ["Name"] = zoneName, ["Force"] = true };

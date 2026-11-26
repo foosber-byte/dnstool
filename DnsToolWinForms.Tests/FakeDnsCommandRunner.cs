@@ -54,5 +54,26 @@ namespace DnsToolWinForms.Tests
                 ("IsReverseLookupZone", (object)isReverse)
             );
         }
+
+        /// <summary>A/AAAA-запись, как возвращает Get-DnsServerResourceRecord (RecordData - вложенный объект).</summary>
+        public static PSObject ResourceRecordA(string hostName, string ip, string type = "A")
+        {
+            var dataKey = type == "A" ? "IPv4Address" : "IPv6Address";
+            return Obj(
+                ("HostName", hostName),
+                ("RecordType", type),
+                ("RecordData", Obj((dataKey, ip)))
+            );
+        }
+
+        /// <summary>PTR-запись обратной зоны: HostName - "5"/"10.5", RecordData.PtrDomainName - FQDN.</summary>
+        public static PSObject ResourceRecordPtr(string hostName, string ptrDomainName)
+        {
+            return Obj(
+                ("HostName", hostName),
+                ("RecordType", "PTR"),
+                ("RecordData", Obj(("PtrDomainName", ptrDomainName)))
+            );
+        }
     }
 }

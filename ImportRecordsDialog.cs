@@ -17,6 +17,8 @@ namespace DnsToolWinForms
     {
         public List<ImportFolderChoice> Folders = new List<ImportFolderChoice>();
         public bool ExcludeApex;
+        /// <summary>-CreatePtr для импортируемых A/AAAA-записей (по умолчанию включён).</summary>
+        public bool CreatePtr = true;
     }
 
     /// <summary>
@@ -95,6 +97,21 @@ namespace DnsToolWinForms
             }
 
             var chkExcludeApex = new CheckBox { Text = "Исключить @-записи (корень зоны)", Location = new Point(16, y), AutoSize = true };
+            y += 28;
+
+            // -CreatePtr: сервер сам создаст PTR в reverse-зоне для каждой A/AAAA-записи.
+            // Если обратной зоны нет - PTR молча пропустится (без ошибки), как в dnsmgmt.msc.
+            var toolTipPtr = new ToolTip();
+            var chkCreatePtr = new CheckBox
+            {
+                Text = "Обновлять соответствующие PTR записи узлов (для A/AAAA)",
+                Location = new Point(16, y),
+                AutoSize = true,
+                Checked = true
+            };
+            toolTipPtr.SetToolTip(chkCreatePtr,
+                "Для каждой импортируемой A/AAAA-записи сервер попытается создать PTR в зоне обратного просмотра.\n" +
+                "Если подходящей обратной зоны нет - PTR пропускается без ошибки, сама запись создаётся.");
             y += 32;
 
             // Позиции с запасом от правого края (ClientSize.Width=500) - раньше btnImport
@@ -104,6 +121,7 @@ namespace DnsToolWinForms
 
             dlg.Controls.Add(lblInfo);
             dlg.Controls.Add(chkExcludeApex);
+            dlg.Controls.Add(chkCreatePtr);
             dlg.Controls.Add(btnCancel);
             dlg.Controls.Add(btnImport);
             dlg.AcceptButton = btnImport;
@@ -111,7 +129,7 @@ namespace DnsToolWinForms
 
             if (dlg.ShowDialog() != DialogResult.OK) return null;
 
-            var result = new ImportOptionsResult { ExcludeApex = chkExcludeApex.Checked };
+            var result = new ImportOptionsResult { ExcludeApex = chkExcludeApex.Checked, CreatePtr = chkCreatePtr.Checked };
             for (var i = 0; i < detectedFolders.Count; i++)
             {
                 var (chk, ip) = folderRows[i];

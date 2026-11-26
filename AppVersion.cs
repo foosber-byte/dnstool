@@ -7,6 +7,6 @@ namespace DnsToolWinForms
     /// </summary>
     public static class AppVersion
     {
-        public const string Current = "2.9.11";
+        public const string Current = "3.0.0";
     }
 }

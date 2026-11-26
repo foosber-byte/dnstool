@@ -195,6 +195,36 @@ namespace DnsToolWinForms.Tests
             Assert.False(p.ContainsKey("TimeToLive"));
         }
 
+        // ---------- CreatePtr ----------
+
+        [Theory]
+        [InlineData("A")]
+        [InlineData("AAAA")]
+        public void BuildAddRecordCommand_CreatePtrAddsSwitch(string type)
+        {
+            var value = type == "A" ? "10.0.0.1" : "::1";
+            var (_, p) = DnsRecordService.BuildAddRecordCommand("z", "s", type, "www", value, "", "", "", "", createPtr: true);
+            Assert.True((bool)p["CreatePtr"]);
+        }
+
+        [Theory]
+        [InlineData("CNAME")]
+        [InlineData("PTR")]
+        [InlineData("MX")]
+        [InlineData("TXT")]
+        public void BuildAddRecordCommand_CreatePtrIgnoredForNonAddressTypes(string type)
+        {
+            var (_, p) = DnsRecordService.BuildAddRecordCommand("z", "s", type, "www", "x", "10", "", "");
+            Assert.False(p.ContainsKey("CreatePtr"));
+        }
+
+        [Fact]
+        public void BuildAddRecordCommand_NoCreatePtr_OmitsSwitch()
+        {
+            var (_, p) = DnsRecordService.BuildAddRecordCommand("z", "s", "A", "www", "10.0.0.1", "", "", "");
+            Assert.False(p.ContainsKey("CreatePtr"));
+        }
+
         [Fact]
         public void FormatTtl_RendersHourDefault()
         {

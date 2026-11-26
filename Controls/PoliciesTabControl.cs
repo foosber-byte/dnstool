@@ -100,7 +100,7 @@ namespace DnsToolWinForms.Controls
             var btnLoadPolicyZoneNames = IconFactory.CreateButton(IconFactory.Refresh(), "Обновить список зон", _toolTip,
                 async (s, e) => await RefreshZoneComboAsync());
 
-            var btnRefresh = IconFactory.CreateButton(IconFactory.Folder(), "Показать политики зоны", _toolTip,
+            var btnRefresh = IconFactory.CreateButton(IconFactory.TreeRefresh(), "Показать политики зоны", _toolTip,
                 async (s, e) => await RefreshPoliciesAsync());
 
             var btnAdd = IconFactory.CreateButton(IconFactory.Add(), "Создать политику (привязать подсеть к scope)...", _toolTip, async (s, e) =>

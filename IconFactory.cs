@@ -26,12 +26,10 @@ namespace DnsToolWinForms
         public static Bitmap Refresh()
         {
             var bmp = NewCanvas(out var g);
-            using var pen = new Pen(PenColor, 1.6f);
-            g.DrawArc(pen, 3, 3, 12, 12, -30, 270);
-            // стрелка на конце дуги
-            var arrow = new[] { new Point(14, 3), new Point(16, 6), new Point(12, 6) };
+            using var pen = new Pen(PenColor, 1.8f);
+            g.DrawArc(pen, 3f, 3f, 12f, 12f, -90f, -320f);
             using var brush = new SolidBrush(PenColor);
-            g.FillPolygon(brush, arrow);
+            g.FillPolygon(brush, new[] { new PointF(11.3f, 1.6f), new PointF(16.3f, 4.6f), new PointF(12.1f, 7.1f) });
             g.Dispose();
             return bmp;
         }
@@ -40,11 +38,10 @@ namespace DnsToolWinForms
         public static Bitmap RefreshZone()
         {
             var bmp = NewCanvas(out var g);
-            using var pen = new Pen(PenColor, 1.6f);
-            g.DrawArc(pen, 3, 3, 12, 12, -30, 270);
-            var arrow = new[] { new Point(14, 3), new Point(16, 6), new Point(12, 6) };
+            using var pen = new Pen(PenColor, 1.7f);
+            g.DrawArc(pen, 2.6f, 2.6f, 12.8f, 12.8f, -90f, -320f);
             using var brush = new SolidBrush(PenColor);
-            g.FillPolygon(brush, arrow);
+            g.FillPolygon(brush, new[] { new PointF(11.6f, 0.9f), new PointF(16.9f, 4.1f), new PointF(12.4f, 6.9f) });
             using var font = new Font("Segoe UI", 6.5f, FontStyle.Bold);
             var textSize = g.MeasureString("R", font);
             g.DrawString("R", font, brush, (Size - textSize.Width) / 2f, (Size - textSize.Height) / 2f + 1);
@@ -78,13 +75,16 @@ namespace DnsToolWinForms
         {
             var bmp = NewCanvas(out var g);
             using var pen = new Pen(PenColor, 1.5f);
-            g.DrawRectangle(pen, 4, 5, 10, 10); // корзина
-            g.DrawLine(pen, 2, 5, 16, 5);       // крышка
-            g.DrawLine(pen, 7, 2, 11, 2);       // ручка
-            g.DrawLine(pen, 7, 2, 7, 5);
-            g.DrawLine(pen, 11, 2, 11, 5);
-            g.DrawLine(pen, 7, 8, 7, 12);
-            g.DrawLine(pen, 11, 8, 11, 12);
+            g.DrawLine(pen, 2.5f, 4.5f, 15.5f, 4.5f);       // крышка
+            g.DrawLine(pen, 7f, 4.5f, 7f, 2.7f);            // ручка
+            g.DrawLine(pen, 7f, 2.7f, 11f, 2.7f);
+            g.DrawLine(pen, 11f, 2.7f, 11f, 4.5f);
+            g.DrawLine(pen, 4.6f, 6.6f, 5.4f, 15.3f);       // корпус-трапеция
+            g.DrawLine(pen, 5.4f, 15.3f, 12.6f, 15.3f);
+            g.DrawLine(pen, 12.6f, 15.3f, 13.4f, 6.6f);
+            using var ribPen = new Pen(PenColor, 1.3f);
+            g.DrawLine(ribPen, 7.4f, 8.6f, 7.4f, 13.3f);    // рёбра
+            g.DrawLine(ribPen, 10.6f, 8.6f, 10.6f, 13.3f);
             g.Dispose();
             return bmp;
         }
@@ -103,10 +103,11 @@ namespace DnsToolWinForms
         {
             var bmp = NewCanvas(out var g);
             using var pen = new Pen(PenColor, 1.6f);
-            g.DrawLine(pen, 9, 7, 9, 16);
-            var arrow = new[] { new Point(5, 10), new Point(9, 6), new Point(13, 10) }; // стрелка вверх
-            g.DrawLines(pen, arrow);
-            g.DrawLine(pen, 3, 3, 15, 3); // "источник" сверху
+            g.DrawLine(pen, 3f, 11.5f, 3f, 14.5f);          // открытый лоток снизу
+            g.DrawLine(pen, 3f, 14.5f, 15f, 14.5f);
+            g.DrawLine(pen, 15f, 14.5f, 15f, 11.5f);
+            g.DrawLine(pen, 9f, 12f, 9f, 3f);               // стрелка вверх из лотка
+            g.DrawLines(pen, new[] { new PointF(5.5f, 6.5f), new PointF(9f, 3f), new PointF(12.5f, 6.5f) });
             g.Dispose();
             return bmp;
         }
@@ -115,10 +116,11 @@ namespace DnsToolWinForms
         {
             var bmp = NewCanvas(out var g);
             using var pen = new Pen(PenColor, 1.6f);
-            g.DrawLine(pen, 9, 2, 9, 11);
-            var arrow = new[] { new Point(5, 8), new Point(9, 12), new Point(13, 8) }; // стрелка вниз
-            g.DrawLines(pen, arrow);
-            g.DrawLine(pen, 3, 15, 15, 15); // лоток снизу
+            g.DrawLine(pen, 3f, 11.5f, 3f, 14.5f);          // открытый лоток снизу
+            g.DrawLine(pen, 3f, 14.5f, 15f, 14.5f);
+            g.DrawLine(pen, 15f, 14.5f, 15f, 11.5f);
+            g.DrawLine(pen, 9f, 2.5f, 9f, 11f);             // стрелка вниз в лоток
+            g.DrawLines(pen, new[] { new PointF(5.5f, 7.5f), new PointF(9f, 11f), new PointF(12.5f, 7.5f) });
             g.Dispose();
             return bmp;
         }
@@ -149,13 +151,27 @@ namespace DnsToolWinForms
             return bmp;
         }
 
-        public static Bitmap Folder()
+        /// <summary>
+        /// "Обновить дерево" (серверы/зоны/политики): маленькое дерево (корень + два
+        /// потомка) + дуга обновления со стрелкой в правом нижнем углу. Придумано после
+        /// ревью: старая папка не отражала сути "перечитать дерево".
+        /// </summary>
+        public static Bitmap TreeRefresh()
         {
             var bmp = NewCanvas(out var g);
-            using var pen = new Pen(PenColor, 1.4f);
-            g.DrawLine(pen, 2, 5, 7, 5);
-            g.DrawLine(pen, 7, 5, 9, 7);
-            g.DrawRectangle(pen, 2, 7, 14, 8);
+            using var pen = new Pen(PenColor, 1.3f);
+            // дерево: корень сверху, ствол, ветви, два потомка снизу
+            g.DrawRectangle(pen, 2f, 2f, 5f, 3.5f);         // корневой узел
+            g.DrawLine(pen, 4.5f, 5.5f, 4.5f, 8f);          // ствол
+            g.DrawLine(pen, 4.5f, 8f, 2.5f, 10.5f);         // ветвь влево
+            g.DrawLine(pen, 4.5f, 8f, 6.5f, 10.5f);         // ветвь вправо
+            g.DrawRectangle(pen, 0.5f, 10.5f, 4f, 3.5f);    // левый потомок
+            g.DrawRectangle(pen, 4.5f, 10.5f, 4f, 3.5f);    // правый потомок
+            // кольцо обновления (паттерн Refresh): разрыв и стрелка сверху справа
+            using var arcPen = new Pen(PenColor, 1.4f);
+            g.DrawArc(arcPen, 9.5f, 1.5f, 7f, 7f, -90f, -310f);
+            using var brush = new SolidBrush(PenColor);
+            g.FillPolygon(brush, new[] { new PointF(14.3f, 1.1f), new PointF(16.8f, 1.8f), new PointF(14.5f, 3.7f) });
             g.Dispose();
             return bmp;
         }
@@ -183,6 +199,26 @@ namespace DnsToolWinForms
             g.DrawLine(plusPen, 10, 8, 10, 13);
             g.DrawLine(plusPen, 8, 10, 13, 10);
 
+            g.Dispose();
+            return bmp;
+        }
+
+        /// <summary>
+        /// "Добавить недостающие PTR": кольцо со стрелкой ПРОТИВ часовой (признак
+        /// "обратного просмотра") + плюс в центре (создание). Один цельный глиф вместо
+        /// двух разнесённых знаков - по итогам ревью.
+        /// </summary>
+        public static Bitmap PtrBackfill()
+        {
+            var bmp = NewCanvas(out var g);
+            using var pen = new Pen(PenColor, 1.6f);
+            // кольцо против часовой: старт справа, конец снизу справа, стрелка на конце
+            g.DrawArc(pen, 2.8f, 2.8f, 11.4f, 11.4f, 355f, -300f);
+            using var brush = new SolidBrush(PenColor);
+            g.FillPolygon(brush, new[] { new PointF(13.6f, 11.9f), new PointF(12.6f, 14.4f), new PointF(10.9f, 11.9f) });
+            using var plusPen = new Pen(PenColor, 1.7f) { StartCap = LineCap.Round, EndCap = LineCap.Round };
+            g.DrawLine(plusPen, 8.5f, 6f, 8.5f, 11f);              // плюс в центре кольца
+            g.DrawLine(plusPen, 6f, 8.5f, 11f, 8.5f);
             g.Dispose();
             return bmp;
         }
